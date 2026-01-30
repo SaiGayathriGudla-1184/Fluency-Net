@@ -492,9 +492,7 @@ def extract_json_from_text(content: str, prompt_text: str) -> dict:
         json_str = re.sub(r'"rate":\s*[^,\n}]+?=\s*(\d+)', r'"rate": \1', json_str)
         # Fix trailing commas (common LLM error) which breaks json.loads
         json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
-        # Remove comments (// ... and /* ... */)
-        json_str = re.sub(r'//.*$', '', json_str, flags=re.MULTILINE)
-        json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
+        # NOTE: Comment stripping removed to prevent breaking URLs (e.g. http://) inside strings
         
         def clean_and_return(data):
             if not isinstance(data, dict):
@@ -1442,8 +1440,8 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
         
         # 3.5 Video Processing (Dubbing)
         output_video_url = None
-        if isinstance(input_data, str) and os.path.exists(input_data) and has_video and output_audio_url:
-             output_video_url = await loop.run_in_executor(None, lambda: merge_audio_video(input_data, output_audio_url))
+        # if isinstance(input_data, str) and os.path.exists(input_data) and has_video and output_audio_url:
+        #      output_video_url = await loop.run_in_executor(None, lambda: merge_audio_video(input_data, output_audio_url))
 
         # 4. Calculate Metrics (WER / Correction Rate)
         # We treat the "Corrected Text" as the Reference (Ground Truth) and Input as Hypothesis
