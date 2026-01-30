@@ -9,19 +9,30 @@ def install_python_dependencies():
     print("📦 Installing Python dependencies...")
     try:
         # Explicitly install numpy and sounddevice first to ensure they are available
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy", "sounddevice", "scipy", "fastapi", "uvicorn", "jinja2", "python-multipart", "websockets", "faster-whisper", "misaki[en]", "agno", "edge-tts"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+        
+        # Core dependencies
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy", "scipy", "fastapi", "uvicorn", "jinja2", "python-multipart", "websockets", "agno", "edge-tts", "jiwer", "python-dotenv", "langdetect", "soundfile", "requests", "openai", "sounddevice", "RealtimeSTT"])
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to install Core Python dependencies: {e}")
+        sys.exit(1)
 
-        # Install from requirements.txt
-        if os.path.exists("requirements.txt"):
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-        else:
-            print("⚠️ requirements.txt not found.")
+    # Attempt to install faster-whisper (Critical for functionality)
+    print("📦 Installing faster-whisper (Int8 Quantization Engine)...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper>=1.0.0"])
+    except subprocess.CalledProcessError:
+        print("⚠️  WARNING: faster-whisper installation failed.")
+        print("    Please ensure you are using a compatible Python version (3.10 - 3.12).")
+        print("    Proceeding with model downloads so you are ready once Python is fixed.")
 
+    try:
         # Install kokoro-onnx specifically as per README
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-deps", "kokoro-onnx==0.4.7"])
         print("✅ Python dependencies installed.")
     except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to install Python dependencies: {e}")
+        print(f"❌ Failed to install Kokoro dependencies: {e}")
+        sys.exit(1)
 
 def download_file(url, filename):
     if os.path.exists(filename):
@@ -80,6 +91,16 @@ def check_system_requirements():
                 print("ℹ️ Please run 'espeak-ng-X64.msi' to install eSpeak NG.")
         else:
             print("✅ eSpeak NG is installed and in PATH.")
+
+        # 3. Check FFmpeg
+        print("   [System] Checking FFmpeg...")
+        if shutil.which("ffmpeg") is None:
+            print("⚠️ FFmpeg not found in PATH.")
+            print("   Video processing features (dubbing) will be disabled.")
+            print("   👉 Install via Winget: winget install Gyan.FFmpeg")
+            print("   👉 Or download from: https://ffmpeg.org/download.html")
+        else:
+            print("✅ FFmpeg is installed.")
 
 def pull_ollama_model(model_name="llama3.1:8b"):
     print(f"🦙 Pulling Ollama model ({model_name})...")
