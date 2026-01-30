@@ -1,5 +1,5 @@
 
-# Vocal Agent - Stutter2Fluent
+# Fluency-Net
 
 A real-time, AI-powered speech therapy assistant designed to help users improve fluency. This application uses advanced speech-to-speech technology to analyze stuttering patterns, provide therapeutic feedback, and generate fluent audio/video output.
 

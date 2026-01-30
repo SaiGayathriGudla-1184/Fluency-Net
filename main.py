@@ -721,7 +721,7 @@ async def lifespan(app: FastAPI):
                 print(f"⚠️ Failed to delete temp file {file_path}: {e}")
     yield
 
-app = FastAPI(title="Vocal Agent", lifespan=lifespan)
+app = FastAPI(title="Fluency-Net", lifespan=lifespan)
 templates = Jinja2Templates(directory=".")
 
 # --- Setup Static & Temp Directories ---
@@ -763,8 +763,8 @@ whisper_model = WhisperModel(whisper_model_size, device="cpu", compute_type="int
 # --- Internationalization (i18n) ---
 translations = {
     "en": {
-        "title": "Vocal Agent - Stutter2Fluent",
-        "header": "🎙️ Vocal Agent",
+        "title": "Fluency-Net",
+        "header": "🎙️ Fluency-Net",
         "subheader": "Real-Time Speech-to-Speech AI Assistant",
         "start_button": "Start Recording",
         "stop_button": "Stop Recording",
@@ -1630,7 +1630,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 def main():
     app_port = int(os.getenv("PORT", 8000))
-    print(f"🚀 Starting Vocal Agent ({ACTIVE_TIER} tier)...")
+    print(f"🚀 Starting Fluency-Net ({ACTIVE_TIER} tier)...")
     print(f"ℹ️  Voice Profile: {VOICE_PROFILE}, Speed: {SPEED}x")
     print(f"👉 Open your browser at http://localhost:{app_port}")
     print(f"   (Set the 'PORT' environment variable to use a different port if {app_port} is busy)")
