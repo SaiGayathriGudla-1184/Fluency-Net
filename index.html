@@ -1187,6 +1187,12 @@
                     };
 
                     mediaRecorder.onstop = async () => {
+                        // Stop the camera/microphone stream immediately after recording stops
+                        if (mediaStream) {
+                            mediaStream.getTracks().forEach(track => track.stop());
+                            mediaStream = null;
+                        }
+
                         const blobType = currentMode === 'video' ? 'video/webm' : 'audio/webm';
                         const audioBlob = new Blob(audioChunks, { type: blobType });
                         const recordBtn = document.getElementById('recordBtn');

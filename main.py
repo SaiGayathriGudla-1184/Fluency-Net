@@ -38,7 +38,7 @@ if sys.platform == "win32":
 
 # Robust import for faster_whisper with helpful error message
 try:
-    from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel, decode_audio
 except ImportError:
     print("❌ Critical Error: 'faster_whisper' module not found.\n   This is likely due to Python 3.14 incompatibility.\n   Please install Python 3.10, 3.11, or 3.12 and reinstall dependencies.")
     sys.exit(1)
@@ -336,6 +336,11 @@ knowledge_agent_ai = Agent(
            - Remove ONLY disfluencies such as repetitions (e.g., "I-I-I"), prolongations (e.g., "ssss-snake"), blocks (silence), and interjections (e.g., "um", "uh", "like").
            - STRICTLY PRESERVE the original words and vocabulary.
            - DO NOT paraphrase, DO NOT use synonyms, and DO NOT fix grammar unless the error is a direct result of the stutter.
+           - **CRITICAL: Reconstruct Fragmented Words**: If the input contains repeated syllables that form a word, merge them.
+             * Example: "u... u... umbrella" -> "umbrella"
+           - **Contextual Restoration**: If the stuttering has distorted a word (e.g. "mara" instead of "hamara" due to a block), restore the intended word based on the sentence context.
+             * Example: "ha ha ha ha mara ba ba barat ma ma ma han" -> "Hamara Bharat Mahan" (Correcting 'mara'->'Hamara', 'barat'->'Bharat', 'han'->'Mahan' based on the famous phrase).
+           
            - If the input is mixed language (e.g., "Main market ja raha hoon"), KEEP IT MIXED ("Main market ja raha hoon").
            - The corrected text MUST be in the same language as the input.
            - CRITICAL: If the input text is in English, the output "text" MUST be in English. Do NOT translate English input to Hindi or any other language.
@@ -382,6 +387,44 @@ knowledge_agent_ai = Agent(
            - "Beginner": High disfluency (>10%). Focus on basic breathing, slow pacing, anxiety reduction.
            - "Intermediate": Moderate disfluency (3-10%). Focus on soft onsets, continuous phonation, phrasing.
            - "Advanced": Low disfluency (<3%). Focus on intonation, prosody, public speaking confidence.
+           
+        IN-CONTEXT LEARNING EXAMPLES (FEW-SHOT):
+        - Input: "ha ha ha ha mara ba ba barat ma ma ma han"
+          Output: {{
+            "text": "Hamara Bharat Mahan.",
+            "english_translation": "Our India is Great.",
+            "metrics": {{"words": 3, "disfluencies": 8, "rate": 27}},
+            "analysis": "<ul><li><b>Syllable Repetition</b> on 'Ha', 'Ba', 'Ma'.</li><li><b>Word Reconstruction</b>: Merged fragmented syllables to form 'Hamara', 'Bharat', 'Mahan'.</li></ul>",
+            "suggestions": "<ul><li>Practice rhythm and pacing.</li></ul>",
+            "soap": {{"s": "Patriotic", "o": "Severe Repetition", "a": "Developmental Stuttering", "p": "Fluency Shaping"}},
+            "level": "Beginner",
+            "classification": "Developmental Stuttering",
+            "demographics": "Adult"
+          }}
+        - Input: "H-h-hindi: म-म-मेरा न-न-नाम... अ... र-र-राहुल है, और म-म-मैं... द-द-दिल्ली से हूँ।"
+          Output: {{
+            "text": "Hindi: मेरा नाम राहुल है, और मैं दिल्ली से हूँ।",
+            "english_translation": "My name is Rahul, and I am from Delhi.",
+            "metrics": {{"words": 9, "disfluencies": 5, "rate": 60}},
+            "analysis": "<ul><li><b>Sound Repetition (SR)</b> on 'म' (Ma) and 'न' (Na).</li></ul>",
+            "suggestions": "<ul><li>Light articulatory contact.</li></ul>",
+            "soap": {{"s": "Neutral", "o": "Repetitions", "a": "Mild Stuttering", "p": "Monitor"}},
+            "level": "Intermediate",
+            "classification": "Developmental Stuttering",
+            "demographics": "Adult"
+          }}
+        - Input: "C-c-could you... c-could you t-t-tell me w-where the... the... [block]... st-station is l-l-located?"
+          Output: {{
+            "text": "Could you tell me where the station is located?",
+            "english_translation": "",
+            "metrics": {{"words": 9, "disfluencies": 6, "rate": 50}},
+            "analysis": "<ul><li><b>Block</b> before 'station'.</li><li><b>Word Repetition</b> on 'could'.</li></ul>",
+            "suggestions": "<ul><li>Easy onset.</li></ul>",
+            "soap": {{"s": "Anxious", "o": "Blocking", "a": "Moderate Stuttering", "p": "Therapy"}},
+            "level": "Intermediate",
+            "classification": "Developmental Stuttering",
+            "demographics": "Adult"
+          }}
 
         8. "classification": (String) The specific type of dysfluency detected. Choose one:
            - "Developmental Stuttering": Typical childhood onset patterns (repetitions, prolongations).
@@ -1238,6 +1281,23 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
             detected_lang = lang_pref if lang_pref != "auto" else "en" # Default or trust pref
         else:
             # 1. Transcribe Audio
+            
+            # Decode audio to numpy array upfront to enable Acoustic Feature Extraction for files
+            audio_np = None
+            try:
+                audio_source_for_decode = input_data
+                if isinstance(input_data, bytes):
+                    audio_source_for_decode = io.BytesIO(input_data)
+                
+                # decode_audio handles file paths (str) and file-like objects (BytesIO)
+                audio_np = decode_audio(audio_source_for_decode, sampling_rate=16000)
+                
+                # Extract Acoustic Features (RMS, ZCR)
+                acoustic_features = extract_acoustic_features(audio_np)
+                print(f"📊 Acoustic Features Extracted: RMS={acoustic_features.get('rms',0):.3f}, ZCR={acoustic_features.get('zcr',0):.3f}")
+            except Exception as e:
+                print(f"⚠️ Acoustic Feature Extraction failed (Audio decoding error): {e}")
+
             tiers_to_try = [ACTIVE_TIER]
             if ACTIVE_TIER == "low_latency":
                 tiers_to_try.append("balanced")
@@ -1255,13 +1315,10 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
                     current_beam_size = tier_settings.get("beam_size", 1)
                     print(f"🎤 Transcribing with Whisper ({whisper_model_size} model, tier={tier}, beam_size={current_beam_size})...")
                     try:
-                        audio_source = input_data
-                        if isinstance(input_data, bytes):
-                            audio_source = io.BytesIO(input_data)
-                        else:
-                            print(f"   📂 Processing large audio file from disk: {input_data}")
+                        # Use pre-decoded audio_np if available, otherwise fallback to input_data
+                        source = audio_np if audio_np is not None else (io.BytesIO(input_data) if isinstance(input_data, bytes) else input_data)
                         
-                        segments_gen, info = whisper_model.transcribe(audio_source, beam_size=current_beam_size, vad_filter=True, word_timestamps=False, condition_on_previous_text=False)
+                        segments_gen, info = whisper_model.transcribe(source, beam_size=current_beam_size, vad_filter=True, word_timestamps=False, condition_on_previous_text=False)
                         return list(segments_gen), info
                     except Exception as e:
                         print(f"❌ Whisper Transcription Error: {e}")
@@ -1289,14 +1346,6 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
             
             if info is None:
                 raise ValueError("Audio transcription failed. The audio file might be corrupt or unsupported.")
-
-            # Extract Acoustic Features (if input was bytes, we can reuse)
-            if isinstance(input_data, bytes):
-                try:
-                    audio_np_features = np.frombuffer(input_data, dtype=np.float32)
-                    acoustic_features = extract_acoustic_features(audio_np_features)
-                except Exception:
-                    pass # Ignore if format doesn't match simple float32 buffer
 
         # Handle empty transcription
         if not transcribed_text:
