@@ -10,3 +10,8 @@ venv/
 temp/
 *.onnx
 *.bin
+
+# Project Artifacts
+models/
+data/
+*.db
