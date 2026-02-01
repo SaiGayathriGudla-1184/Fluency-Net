@@ -11,27 +11,17 @@ def install_python_dependencies():
         # Explicitly install numpy and sounddevice first to ensure they are available
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
         
-        # Core dependencies
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy", "scipy", "fastapi", "uvicorn", "jinja2", "python-multipart", "websockets", "agno", "edge-tts", "jiwer", "python-dotenv", "langdetect", "soundfile", "requests", "openai", "sounddevice", "RealtimeSTT"])
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to install Core Python dependencies: {e}")
-        sys.exit(1)
-
-    # Attempt to install faster-whisper (Critical for functionality)
-    print("📦 Installing faster-whisper (Int8 Quantization Engine)...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "faster-whisper>=1.0.0"])
-    except subprocess.CalledProcessError:
-        print("⚠️  WARNING: faster-whisper installation failed.")
-        print("    Please ensure you are using a compatible Python version (3.10 - 3.12).")
-        print("    Proceeding with model downloads so you are ready once Python is fixed.")
-
-    try:
-        # Install kokoro-onnx specifically as per README
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-deps", "kokoro-onnx==0.4.7"])
+        # Install all dependencies from requirements.txt
+        if os.path.exists("requirements.txt"):
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+        else:
+            print("❌ requirements.txt not found.")
+            sys.exit(1)
+            
         print("✅ Python dependencies installed.")
     except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to install Kokoro dependencies: {e}")
+        print(f"❌ Failed to install Python dependencies: {e}")
+        print("   Note: faster-whisper requires Python 3.10 - 3.12.")
         sys.exit(1)
 
 def download_file(url, filename):

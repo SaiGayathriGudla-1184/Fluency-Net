@@ -104,6 +104,7 @@
         .analysis-content ul { list-style-type: disc; padding-left: 1.25rem; margin-top: 0.5rem; margin-bottom: 0.5rem; }
         .analysis-content li { margin-bottom: 0.25rem; }
         .analysis-content strong { font-weight: 600; }
+        canvas#visualizer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border-radius: 50%; pointer-events: none; opacity: 0.6; }
     </style>
 </head>
 <body class="text-gray-800 dark:text-gray-200 transition-colors duration-300 h-screen overflow-hidden font-sans">
@@ -126,7 +127,10 @@
                     <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-white font-bold shadow-lg shadow-primary/30">FN</div>
                     <h1 class="font-bold text-lg tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-gray-800 to-gray-600 dark:from-white dark:to-gray-400">Fluency-Net</h1>
                 </div>
-                <div>
+                <div class="flex gap-2">
+                    <button onclick="resetSettings()" class="p-2 rounded-full hover:bg-gray-200/50 dark:hover:bg-gray-700/50 transition-colors text-gray-500 dark:text-gray-400" title="Reset Settings">
+                        <i class="fas fa-undo"></i>
+                    </button>
                     <button onclick="clearChat()" class="p-2 rounded-full hover:bg-red-100/50 dark:hover:bg-red-900/30 transition-colors text-red-500 ml-1" title="Clear Chat" aria-label="Clear Chat History">
                         <i class="fas fa-trash-alt"></i>
                     </button>
@@ -140,40 +144,47 @@
                 <div class="space-y-2">
                     <label class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Language Engine</label>
                     <div class="relative">
-                        <select id="languageSelect" onchange="loadVoices()" class="w-full p-3 bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 rounded-xl text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-all appearance-none backdrop-blur-sm">
+                        <select id="languageSelect" class="w-full p-3 bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 rounded-xl text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-all appearance-none backdrop-blur-sm">
                         <option value="auto">✨ Auto Detect</option>
                         <option value="en">🇺🇸 English</option>
                         <option value="te">🇮🇳 Telugu (తెలుగు)</option>
                         <option value="hi">🇮🇳 Hindi (हिंदी)</option>
-                        <option value="bn">🇮🇳 Bengali (বাংলা)</option>
-                        <option value="mr">🇮🇳 Marathi (मराठी)</option>
-                        <option value="kn">🇮🇳 Kannada (ಕನ್ನಡ)</option>
                         <option value="ta">🇮🇳 Tamil (தமிழ்)</option>
-                        <option value="es">🇪🇸 Spanish (Español)</option>
-                        <option value="zh">🇨🇳 Mandarin Chinese (中文)</option>
+                        <option value="kn">🇮🇳 Kannada (ಕನ್ನಡ)</option>
+                        <option value="ml">🇮🇳 Malayalam (മലയാളം)</option>
+                        <option value="bn">🇮🇳 Bengali (বাংলা)</option>
                     </select>
                     <div class="absolute right-3 top-3 pointer-events-none text-gray-400"><i class="fas fa-chevron-down text-xs"></i></div>
                     </div>
                 </div>
-
-                <!-- Voice & Tone -->
-                <div class="grid grid-cols-2 gap-3">
-                    <div class="space-y-2">
-                        <label class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Voice Model</label>
-                        <select id="voiceSelect" class="w-full p-2.5 bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 rounded-xl text-sm focus:ring-2 focus:ring-primary/50 outline-none"></select>
-                    </div>
-                    <div class="space-y-2">
-                        <label class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tone</label>
-                        <select id="toneSelect" class="w-full p-2.5 bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 rounded-xl text-sm focus:ring-2 focus:ring-primary/50 outline-none">
-                            <option value="Professional">Professional</option>
-                            <option value="Conversational">Conversational</option>
-                            <option value="Technical">Technical</option>
-                            <option value="Empathetic">Empathetic</option>
+                
+                <!-- Voice Selector -->
+                <div class="space-y-2">
+                    <label class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Voice</label>
+                    <div class="relative flex gap-2">
+                        <select id="voiceSelect" class="w-full p-3 bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 rounded-xl text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-all appearance-none backdrop-blur-sm">
                         </select>
+                        <div class="absolute right-14 top-3 pointer-events-none text-gray-400"><i class="fas fa-chevron-down text-xs"></i></div>
+                        <button onclick="playVoiceSample()" class="p-3 bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 rounded-xl text-primary hover:bg-primary hover:text-white transition-colors" title="Play Sample">
+                            <i class="fas fa-play text-xs"></i>
+                        </button>
                     </div>
                 </div>
 
-                <!-- Speed -->
+                <!-- Tone Selector -->
+                <div class="space-y-2">
+                    <label class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Tone</label>
+                    <div class="relative">
+                        <select id="toneSelect" class="w-full p-3 bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 rounded-xl text-sm focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-all appearance-none backdrop-blur-sm">
+                            <option value="Professional">Professional</option>
+                            <option value="Friendly">Friendly</option>
+                            <option value="Empathetic">Empathetic</option>
+                        </select>
+                        <div class="absolute right-3 top-3 pointer-events-none text-gray-400"><i class="fas fa-chevron-down text-xs"></i></div>
+                    </div>
+                </div>
+
+                <!-- Speed Selector -->
                 <div class="space-y-2">
                     <label class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Speed</label>
                     <select id="speedSelect" class="w-full p-2.5 bg-white/50 dark:bg-gray-800/50 border border-gray-200/50 dark:border-gray-700/50 rounded-xl text-sm focus:ring-2 focus:ring-primary/50 outline-none">
@@ -192,7 +203,6 @@
                     <div class="flex bg-gray-200 dark:bg-gray-700 rounded-lg p-1 mb-4">
                         <button onclick="setMode('audio')" id="mode-audio" class="flex-1 py-1.5 text-xs font-bold rounded-md bg-white dark:bg-gray-600 shadow-sm transition-all text-primary">Audio</button>
                         <button onclick="setMode('video')" id="mode-video" class="flex-1 py-1.5 text-xs font-bold rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600 transition-all">Video</button>
-                        <button onclick="setMode('stream')" id="mode-stream" class="flex-1 py-1.5 text-xs font-bold rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-300 dark:hover:bg-gray-600 transition-all"><i class="fas fa-bolt text-yellow-500"></i> Live</button>
                     </div>
 
                     <div class="grid grid-cols-2 gap-2 mb-4">
@@ -223,6 +233,7 @@
                             </div>
 
                             <div class="relative z-10" id="recordContainer">
+                                <canvas id="visualizer" width="100" height="100"></canvas>
                                 <div class="pulse-ring"></div>
                                 <div class="pulse-ring"></div>
                                 <div class="pulse-ring"></div>
@@ -286,13 +297,12 @@
             // Visual Toggles
             const audioBtn = document.getElementById('mode-audio');
             const videoBtn = document.getElementById('mode-video');
-            const streamBtn = document.getElementById('mode-stream');
             
             const activeClasses = ['bg-white', 'dark:bg-gray-600', 'shadow-sm', 'text-primary'];
             const inactiveClasses = ['text-gray-500', 'dark:text-gray-400', 'hover:bg-gray-300', 'dark:hover:bg-gray-600'];
 
             // Reset all
-            [audioBtn, videoBtn, streamBtn].forEach(btn => {
+            [audioBtn, videoBtn].forEach(btn => {
                 btn.classList.remove(...activeClasses);
                 btn.classList.add(...inactiveClasses);
             });
@@ -300,12 +310,9 @@
             if(mode === 'audio') {
                 audioBtn.classList.add(...activeClasses);
                 audioBtn.classList.remove(...inactiveClasses);
-            } else if (mode === 'video') {
+            } else {
                 videoBtn.classList.add(...activeClasses);
                 videoBtn.classList.remove(...inactiveClasses);
-            } else {
-                streamBtn.classList.add(...activeClasses);
-                streamBtn.classList.remove(...inactiveClasses);
             }
 
             // Update Upload UI
@@ -325,10 +332,6 @@
                 uploadText.innerText = "MP3, WAV, WEBM";
                 document.getElementById('videoPreviewContainer').classList.add('hidden');
                 document.querySelector('#recordBtn i').className = "fas fa-microphone";
-            } else {
-                // Stream Mode
-                document.getElementById('videoPreviewContainer').classList.add('hidden');
-                document.querySelector('#recordBtn i').className = "fas fa-bolt";
             }
         }
 
@@ -358,14 +361,8 @@
         let mediaRecorder;
         let audioChunks = [];
         let isRecording = false;
+        let allVoices = {}; // Cache for voices
         
-        // Streaming Variables
-        let ws;
-        let audioContext;
-        let workletNode;
-        let streamUserMessageId = null;
-        let streamAgentMessageId = null;
-        let thoughtBuffer = "";
 
         const messageBlobs = {}; // Store blobs in memory for re-processing
 
@@ -383,38 +380,100 @@
             document.querySelectorAll('audio').forEach(a => a.pause());
         }
 
-        // Initialize Options
+        // --- Voice Management ---
         async function loadVoices() {
-            const select = document.getElementById('voiceSelect');
             try {
                 const res = await fetch('/voices');
                 if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-                const voices = await res.json();
-                const lang = document.getElementById('languageSelect').value;
-                select.innerHTML = ''; // Clear existing options
-                
-                let list = [];
-                if (lang === 'auto') {
-                    list = Object.values(voices).flat();
-                } else {
-                    list = voices[lang] || [];
-                }
-
-                if (list.length === 0) {
-                    const opt = document.createElement('option');
-                    opt.value = "";
-                    opt.text = "No voices available";
-                    select.appendChild(opt);
-                }
-
-                list.forEach(v => {
-                    const opt = document.createElement('option');
-                    opt.value = v.id;
-                    opt.text = v.name;
-                    select.appendChild(opt);
-                });
+                allVoices = await res.json();
+                updateVoiceList(); // Initial population
             } catch (e) {
-                alert("Critical Error: Could not load voice models from the server.\nPlease ensure the backend is running and refresh the page.");
+                console.error("Failed to load voices:", e);
+                alert("Could not load voices. Please ensure the backend is running.");
+            }
+        }
+
+        function updateVoiceList() {
+            const select = document.getElementById('voiceSelect');
+            const lang = document.getElementById('languageSelect').value;
+            if (!select) return;
+
+            select.innerHTML = ''; // Clear existing
+                
+            let list = [];
+            if (lang === 'auto') {
+                // If auto, show English voices as default/safe option
+                list = (allVoices && allVoices['en']) ? allVoices['en'] : [];
+            } else {
+                list = (allVoices && (allVoices[lang] || allVoices['en'])) ? (allVoices[lang] || allVoices['en']) : [];
+            }
+
+            if (list.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = "";
+                opt.text = "No voices available";
+                select.appendChild(opt);
+                return;
+            }
+
+            list.forEach(v => {
+                const opt = document.createElement('option');
+                opt.value = v.id;
+                opt.text = v.name;
+                select.appendChild(opt);
+            });
+
+            // Restore Voice Selection
+            const savedVoice = localStorage.getItem('selectedVoice');
+            if (savedVoice && Array.from(select.options).some(opt => opt.value === savedVoice)) {
+                select.value = savedVoice;
+            }
+        }
+
+        const sampleTexts = {
+            "en": "Hello, this is a sample of my voice.",
+            "hi": "नमस्ते, यह मेरी आवाज का एक नमूना है।",
+            "te": "నమస్కారం. నా పేరు శృతి. నేను తెలుగులో మాట్లాడుతున్నాను.",
+            "kn": "ನಮಸ್ಕಾರ, ಇದು ನನ್ನ ಧ್ವನಿಯ ಮಾದರಿ.",
+            "ml": "നമസ്കാരം, ഇത് എന്റെ ശബ്ദത്തിന്റെ മാതൃകയാണ്.",
+            "bn": "নমস্কার, এটি আমার কণ্ঠস্বরের একটি নমুনা।",
+            "es": "Hola, esta es una muestra de mi voz.",
+            "fr": "Bonjour, ceci est un échantillon de ma voix.",
+            "de": "Hallo, dies ist eine Kostprobe meiner Stimme.",
+            "zh": "你好，这是我的声音样本。",
+            "ja": "こんにちは、これは私の声のサンプルです。",
+            "ru": "Привет, это образец моего голоса."
+        };
+
+        async function playVoiceSample() {
+            const voice = document.getElementById('voiceSelect').value;
+            const lang = document.getElementById('languageSelect').value;
+            const text = sampleTexts[lang] || sampleTexts['en'];
+            
+            if (!voice) return alert("Please select a voice first.");
+
+            const btn = document.querySelector('button[title="Play Sample"]');
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin text-xs"></i>';
+            btn.disabled = true;
+
+            const formData = new FormData();
+            formData.append('text', text);
+            formData.append('lang', lang === 'auto' ? 'en' : lang);
+            formData.append('voice', voice);
+
+            try {
+                const res = await fetch('/process/regenerate', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (data.audio_url) {
+                    const audio = new Audio(data.audio_url);
+                    audio.play();
+                }
+            } catch (e) {
+                console.error("Sample play failed:", e);
+            } finally {
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
             }
         }
 
@@ -555,6 +614,14 @@
                  `;
             }
 
+            // Raw Transcription (Added)
+            content += `
+                <div class="mb-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3 border border-gray-100 dark:border-gray-700">
+                    <h3 class="text-xs font-semibold text-gray-400 mb-1 uppercase">Raw Input (What you said)</h3>
+                    <p class="text-md text-gray-600 dark:text-gray-300 italic">"${data.transcription}"</p>
+                </div>
+            `;
+
             // Corrected Text
             content += `
                 <div class="mb-4">
@@ -564,23 +631,7 @@
                 </div>
             `;
             
-            // Output Media (Video or Audio)
-            if (data.response.video_url) {
-                // Video Output
-                content += `
-                    <div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 mb-4">
-                        <div class="flex items-center gap-2 mb-2">
-                            <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white"><i class="fas fa-video"></i></div>
-                            <span class="text-xs font-bold text-gray-500 dark:text-gray-400">Dubbed Video Output</span>
-                        </div>
-                        <video controls src="${data.response.video_url}" class="w-full rounded-lg shadow-sm mb-2"></video>
-                        <div class="flex justify-end gap-3">
-                            <a href="${data.response.video_url}" download="fluent_video.mp4" class="text-xs text-primary hover:underline flex items-center gap-1"><i class="fas fa-download"></i> Video</a>
-                            ${data.response.audio_url ? `<a href="${data.response.audio_url}" download="fluent_audio.wav" class="text-xs text-gray-500 hover:text-primary hover:underline flex items-center gap-1"><i class="fas fa-music"></i> Audio Only</a>` : ''}
-                        </div>
-                    </div>
-                `;
-            } else if (data.response.audio_url) {
+            if (data.response.audio_url) {
                 // Audio Output
                 // Add ID to control playback for barge-in
                 const audioId = `agent-audio-${Date.now()}`;
@@ -594,6 +645,26 @@
                         <a href="${data.response.audio_url}" download="fluent_speech.wav" class="p-2 text-gray-400 hover:text-green-500 transition-colors" title="Download Audio" aria-label="Download Audio">
                             <i class="fas fa-download"></i>
                         </a>
+                    </div>
+                `;
+            }
+
+            // Acoustic Features Dashboard
+            if (data.response.acoustic_features) {
+                content += `
+                    <div class="grid grid-cols-3 gap-2 mb-4">
+                        <div class="bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded text-center border border-indigo-100 dark:border-indigo-800">
+                            <div class="text-[10px] uppercase tracking-wider text-gray-400">Loudness (RMS)</div>
+                            <div class="font-bold text-indigo-600 dark:text-indigo-300">${Number(data.response.acoustic_features.rms).toFixed(3)}</div>
+                        </div>
+                        <div class="bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded text-center border border-indigo-100 dark:border-indigo-800">
+                            <div class="text-[10px] uppercase tracking-wider text-gray-400">Noisiness (ZCR)</div>
+                            <div class="font-bold text-indigo-600 dark:text-indigo-300">${Number(data.response.acoustic_features.zcr).toFixed(3)}</div>
+                        </div>
+                        <div class="bg-indigo-50 dark:bg-indigo-900/20 p-2 rounded text-center border border-indigo-100 dark:border-indigo-800">
+                            <div class="text-[10px] uppercase tracking-wider text-gray-400">Variance</div>
+                            <div class="font-bold text-indigo-600 dark:text-indigo-300">${Number(data.response.acoustic_features.variance).toFixed(3)}</div>
+                        </div>
                     </div>
                 `;
             }
@@ -752,6 +823,14 @@
             }
         }
         
+        function resetSettings() {
+            if(confirm("Reset all settings and clear history?")) {
+                localStorage.clear();
+                sessionStorage.clear();
+                location.reload();
+            }
+        }
+
         function clearChat() {
             if(confirm("Are you sure you want to clear the chat history?")) {
                 sessionStorage.removeItem('chatHistory');
@@ -973,152 +1052,38 @@
             }
         }
 
-        // --- WebSocket Streaming Logic ---
-        
-        const audioWorkletCode = `
-        class AudioProcessor extends AudioWorkletProcessor {
-            process(inputs, outputs, parameters) {
-                const input = inputs[0];
-                if (input.length > 0) {
-                    const channelData = input[0];
-                    this.port.postMessage(channelData);
-                }
-                return true;
-            }
-        }
-        registerProcessor('audio-processor', AudioProcessor);
-        `;
-
-        async function startStreaming() {
-            const statusText = document.getElementById('statusText');
-            statusText.innerText = "Connecting...";
-            
-            // Initialize WebSocket
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-            ws.binaryType = 'arraybuffer';
-            let noiseFloor = 0.005; // Initialize baseline noise floor
-
-            ws.onopen = async () => {
-                statusText.innerText = "Listening... (Speak now)";
-                // Send configuration with Session ID
-                ws.send(JSON.stringify({ action: "config", session_id: sessionId }));
-                
-                document.getElementById('recordContainer').classList.add('recording');
-                
-                // Initialize Audio
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const source = audioContext.createMediaStreamSource(stream);
-                
-                const blob = new Blob([audioWorkletCode], { type: 'application/javascript' });
-                const url = URL.createObjectURL(blob);
-                await audioContext.audioWorklet.addModule(url);
-                
-                workletNode = new AudioWorkletNode(audioContext, 'audio-processor');
-                
-                workletNode.port.onmessage = (event) => {
-                    const inputData = event.data;
-                    let sum = 0;
-                    for (let i = 0; i < inputData.length; i++) {
-                        sum += inputData[i] * inputData[i];
-                    }
-                    const rms = Math.sqrt(sum / inputData.length);
-
-                    // Adaptive Noise Floor: Update baseline
-                    if (rms < noiseFloor) {
-                        noiseFloor = 0.90 * noiseFloor + 0.10 * rms; // Adapt quickly to quiet
-                    } else {
-                        noiseFloor = 0.999 * noiseFloor + 0.001 * rms; // Adapt very slowly to noise
-                    }
-
-                    // --- Barge-in Logic: Detect User Speech ---
-                    if (isAgentSpeaking) {
-                        const dynamicThreshold = Math.max(0.02, Math.min(0.15, noiseFloor * 5));
-                        if (rms > dynamicThreshold) { // Dynamic threshold
-                            stopAllAudio();
-                        }
-                    }
-
-                    if (ws.readyState === WebSocket.OPEN) {
-                        // Send Float32Array directly
-                        ws.send(event.data);
-                    }
-                };
-                
-                source.connect(workletNode);
-                workletNode.connect(audioContext.destination); // Keep alive
-                
-                // Create placeholder UI
-                streamUserMessageId = appendUserMessage("...", null, null, false);
-                thoughtBuffer = "";
-            };
-
-            ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-                
-                if (msg.type === 'transcription') {
-                    updateUserMessageWithTranscription(streamUserMessageId, msg.text);
-                } else if (msg.type === 'thought_stream') {
-                    // Accumulate thoughts
-                    thoughtBuffer += msg.chunk;
-                    // Update UI (Create a temporary agent message if not exists)
-                    if (!streamAgentMessageId) {
-                        streamAgentMessageId = `agent-stream-${Date.now()}`;
-                        // Create placeholder
-                        const chatHistory = document.getElementById('chatHistory');
-                        const div = document.createElement('div');
-                        div.id = streamAgentMessageId;
-                        div.className = 'flex justify-start animate-fade-in w-full mb-4';
-                        chatHistory.appendChild(div);
-                    }
-                    
-                    // Render just the thoughts for now
-                    const div = document.getElementById(streamAgentMessageId);
-                    div.innerHTML = `
-                        <div class="glass-bubble rounded-2xl rounded-tl-sm p-4 shadow-xl max-w-[90%]">
-                            <div class="flex items-center gap-2 mb-2 text-primary animate-pulse">
-                                <i class="fas fa-brain"></i> <span class="text-xs font-bold uppercase">Thinking...</span>
-                            </div>
-                            <div class="text-xs font-mono text-gray-600 dark:text-gray-300 whitespace-pre-wrap border-l-2 border-primary pl-2">${thoughtBuffer.replace(/<thought>|<\/thought>/g, '')}</div>
-                        </div>`;
-                    scrollToBottom();
-                    
-                } else if (msg.type === 'analysis') {
-                    // Final Result
-                    const div = document.getElementById(streamAgentMessageId);
-                    div.remove(); // Remove placeholder
-                    msg.data.thoughts = thoughtBuffer; // Attach thoughts to final data
-                    appendAgentMessage({ response: msg.data, transcription: msg.data.text });
-                } else if (msg.type === 'audio_url') {
-                    // Play audio automatically
-                    const audio = new Audio(msg.url);
-                    // Track state for Barge-in
-                    audio.onplay = () => { isAgentSpeaking = true; currentAgentAudio = audio; };
-                    audio.onended = () => { isAgentSpeaking = false; currentAgentAudio = null; };
-                    audio.onpause = () => { isAgentSpeaking = false; };
-                    audio.play();
-                }
-            };
-        }
-
-        function stopStreaming() {
-            if (ws) {
-                ws.send(JSON.stringify({ action: "process" }));
-                // Don't close WS immediately, wait for response
-                // But stop audio capture
-                if (workletNode) workletNode.disconnect();
-                if (audioContext) audioContext.close();
-                document.getElementById('recordContainer').classList.remove('recording');
-                document.getElementById('statusText').innerText = "Processing...";
-            }
-        }
-
         let mediaStream;
+        let audioContext;
+        let analyser;
+        let dataArray;
+        let canvasContext;
+        let visualizerAnimationId;
 
         document.addEventListener('DOMContentLoaded', () => {
+            // Restore Language
+            const savedLang = localStorage.getItem('selectedLanguage');
+            if (savedLang) {
+                const langSelect = document.getElementById('languageSelect');
+                if (langSelect) langSelect.value = savedLang;
+            }
+
+            // Restore Speed
+            const savedSpeed = localStorage.getItem('selectedSpeed');
+            if (savedSpeed) {
+                const speedSelect = document.getElementById('speedSelect');
+                if (speedSelect) speedSelect.value = savedSpeed;
+            }
+
             loadVoices();
             loadHistory();
+
+            // Add Persistence Listeners
+            document.getElementById('voiceSelect')?.addEventListener('change', (e) => localStorage.setItem('selectedVoice', e.target.value));
+            document.getElementById('speedSelect')?.addEventListener('change', (e) => localStorage.setItem('selectedSpeed', e.target.value));
+            document.getElementById('languageSelect')?.addEventListener('change', (e) => {
+                localStorage.setItem('selectedLanguage', e.target.value);
+                updateVoiceList(); // Update voices when language changes
+            });
             
             const recordBtn = document.getElementById('recordBtn');
             const statusText = document.getElementById('statusText');
@@ -1126,13 +1091,6 @@
             if (recordBtn) {
                 recordBtn.addEventListener('click', async () => {
             if (!isRecording) {
-                // Handle Streaming Mode
-                if (currentMode === 'stream') {
-                    isRecording = true;
-                    recordBtn.innerHTML = '<i class="fas fa-stop"></i>';
-                    startStreaming();
-                    return;
-                }
 
                 // Start Recording
                 const originalBtnContent = recordBtn.innerHTML;
@@ -1148,7 +1106,15 @@
                     }
                     
                     // Configure constraints based on mode
-                    const constraints = currentMode === 'video' ? { audio: true, video: true } : { audio: true };
+                    const constraints = currentMode === 'video' ? 
+                        { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: true } : 
+                        { audio: { 
+                            channelCount: 1, 
+                            sampleRate: 48000, 
+                            echoCancellation: true, 
+                            noiseSuppression: true, 
+                            autoGainControl: true 
+                        }};
                     
                     // Reset stream if mode changed or stream inactive
                     if (mediaStream) {
@@ -1170,9 +1136,33 @@
                         videoEl.play();
                     }
 
+                    // Setup Visualizer
+                    if (currentMode === 'audio') {
+                        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        const source = audioContext.createMediaStreamSource(mediaStream);
+                        analyser = audioContext.createAnalyser();
+                        analyser.fftSize = 64;
+                        source.connect(analyser);
+                        dataArray = new Uint8Array(analyser.frequencyBinCount);
+                        
+                        const canvas = document.getElementById('visualizer');
+                        canvasContext = canvas.getContext('2d');
+                        
+                        function drawVisualizer() {
+                            if (!isRecording) return;
+                            visualizerAnimationId = requestAnimationFrame(drawVisualizer);
+                            analyser.getByteFrequencyData(dataArray);
+                            canvasContext.clearRect(0, 0, canvas.width, canvas.height);
+                            const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                            const scale = 1 + (average / 256) * 0.5;
+                            recordBtn.style.transform = `scale(${scale})`;
+                        }
+                        drawVisualizer();
+                    }
+
                     // Optimize for speed: Use lower bitrate and efficient codec
                     const mimeType = currentMode === 'video' ? 'video/webm;codecs=vp8,opus' : 'audio/webm;codecs=opus';
-                    const options = { mimeType: mimeType, bitsPerSecond: currentMode === 'video' ? 2500000 : 32000 };
+                    const options = { mimeType: mimeType, bitsPerSecond: currentMode === 'video' ? 2500000 : 128000 };
                     
                     if (!MediaRecorder.isTypeSupported(options.mimeType)) {
                         delete options.mimeType; // Fallback to default
@@ -1191,6 +1181,10 @@
                         if (mediaStream) {
                             mediaStream.getTracks().forEach(track => track.stop());
                             mediaStream = null;
+                        }
+                        if (audioContext) {
+                            audioContext.close();
+                            cancelAnimationFrame(visualizerAnimationId);
                         }
 
                         const blobType = currentMode === 'video' ? 'video/webm' : 'audio/webm';
@@ -1216,6 +1210,7 @@
                             recordBtn.disabled = false;
                             recordBtn.innerHTML = currentMode === 'video' ? '<i class="fas fa-video"></i>' : '<i class="fas fa-microphone"></i>';
                             recordBtn.classList.replace('from-red-500', 'from-primary');
+                            recordBtn.style.transform = 'scale(1)'; // Reset scale
                             statusText.innerText = "Tap to start recording";
                         }
                     };
@@ -1249,14 +1244,6 @@
                     statusText.innerText = "Microphone access denied";
                 }
             } else {
-                // Stop Streaming
-                if (currentMode === 'stream') {
-                    stopStreaming();
-                    isRecording = false;
-                    recordBtn.innerHTML = '<i class="fas fa-bolt"></i>';
-                    statusText.innerText = "Tap to start";
-                    return;
-                }
 
                 // Stop Recording
                 if (mediaRecorder && mediaRecorder.state === 'recording') {

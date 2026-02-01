@@ -8,8 +8,8 @@ A real-time, AI-powered speech therapy assistant designed to help users improve 
 - **Real-Time Streaming**: Low-latency speech analysis using WebSockets and AudioWorklet.
 - **Multilingual Support**: Supports English, Hindi, Telugu, Spanish, French, and many more.
 - **AI Analysis**: Uses **Ollama (Llama 3.1)** and **Agno** to detect stuttering types (Repetitions, Blocks, Prolongations) and provide clinical SOAP notes.
+- **Adaptive Agentic Workflow**: Implements a stateful reflex agent that dynamically adjusts therapy goals (e.g., switching from "Fluency Shaping" to "Anxiety Reduction") based on real-time user performance metrics.
 - **Fluent Regeneration**: Reconstructs fragmented speech into fluent text and audio using **Kokoro TTS** (High Quality) or **Edge TTS**.
-- **Video Dubbing**: Merges the generated fluent audio back into the original video, preserving lip-sync where possible.
 - **Acoustic Features**: Analyzes RMS Energy and Zero Crossing Rate to detect physical tension and struggle behaviors.
 
 ## 🛠️ Prerequisites
@@ -69,6 +69,26 @@ python main.py
 - The application will launch at `http://localhost:8000`.
 - If port 8000 is busy, you can change it by setting the `PORT` environment variable.
 
+## 🐳 Docker Deployment
+
+You can run the entire stack (App + Ollama) using Docker Compose.
+
+1. **Build and Start Services**
+
+    ```bash
+    docker-compose up -d --build
+    ```
+
+2. **Download the AI Model** (First time only)
+    Since the Ollama container starts empty, you need to pull the model:
+
+    ```bash
+    docker exec -it fluency-net-ollama ollama pull llama3.1:8b
+    ```
+
+3. **Access the App**
+    Open `http://localhost:8000` in your browser.
+
 ## 📂 Project Structure
 
 - `main.py`: Core backend logic (FastAPI, WebSocket, Audio Pipeline).
@@ -86,12 +106,12 @@ You can configure the application using environment variables or a `.env` file:
 
 ## 🧠 How It Works
 
-1. **Input**: User records audio/video or streams live via WebSocket.
-2. **Transcription**: **Faster-Whisper** converts speech to text.
-3. **Acoustic Analysis**: System calculates Energy and Zero Crossing Rate to detect non-verbal struggle.
-4. **Agent Reasoning**: The AI (Llama 3.1) analyzes the text + acoustic features to identify dysfluencies and determine a therapy strategy (e.g., "Fluency Shaping").
-5. **Synthesis**: **Kokoro TTS** or **Edge TTS** generates a fluent version of the speech.
-6. **Output**: The user receives the fluent audio, a dubbed video, and a detailed clinical analysis.
+### System Architecture
+
+1. **Multimodal Ingestion**: Fuses **Faster-Whisper** transcripts with raw acoustic data (RMS Energy, ZCR) to detect non-verbal "blocks" that text-only models miss.
+2. **Stateful Agent Brain**: Uses `AgentInternalState` to track conversation history and emotional trajectory. The system employs a **Goal-Based Strategy** engine that evaluates the success of previous interventions before selecting the next therapeutic tactic.
+3. **Local-First Inference**: Runs entirely on-device using **Ollama** and **Int8 Quantization**, ensuring patient data privacy and zero cloud latency.
+4. **Generative Synthesis**: Reconstructs fluent speech using **Kokoro TTS** (ONNX) for natural prosody restoration.
 
 ## 🤝 Contributing
 

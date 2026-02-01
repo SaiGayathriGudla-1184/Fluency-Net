@@ -1,43 +1,50 @@
-# Use an official Python runtime as a parent image
-FROM python:3.10-slim
+# syntax=docker/dockerfile:1
+# Use Python 3.11 (Compatible with faster-whisper)
+FROM python:3.11-slim
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV DOCKER_CONTAINER=true
+# Set working directory
+WORKDIR /app
+
+# Install uv for faster package installation
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 # Install system dependencies
-# espeak-ng: required for phonemizer (used by Kokoro/TTS)
-# libportaudio2: required for sounddevice
-# ffmpeg: useful for audio processing
-# curl: for utilities
-RUN apt-get update && apt-get install -y \
-    espeak-ng \
-    libportaudio2 \
+# ffmpeg: for video processing
+# espeak-ng: for Kokoro TTS phonemizer
+# git: for installing git dependencies if any
+# build-essential & portaudio19-dev: for PyAudio/SoundDevice
+# curl: for healthchecks
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    espeak-ng \
+    git \
+    build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# Set Environment Variables
+ENV PYTHONUNBUFFERED=1
+ENV PHONEMIZER_ESPEAK_PATH=/usr/bin/espeak-ng
+ENV OLLAMA_HOST=http://host.docker.internal:11434
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r requirements.txt
 
-# Download Kokoro TTS models during build
-RUN python -c "import urllib.request; \
-    print('Downloading Kokoro models...'); \
-    urllib.request.urlretrieve('https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx', 'kokoro-v1.0.onnx'); \
-    urllib.request.urlretrieve('https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin', 'voices-v1.0.bin'); \
-    print('Download complete.')"
-
-# Copy the rest of the application code
+# Copy the rest of the application
 COPY . .
+
+# Create temp directory
+RUN mkdir -p temp
 
 # Expose the port
 EXPOSE 8000
 
 # Run the application
+# We use python main.py to trigger the startup logic (model checks)
 CMD ["python", "main.py"]

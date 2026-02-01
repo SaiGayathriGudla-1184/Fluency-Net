@@ -19,9 +19,12 @@ import html
 import mimetypes
 import numpy as np
 import ast
+import sqlite3
+import logging
 from pydantic import BaseModel, Field
 from typing import Optional, List, Union, Dict
 from fastapi import FastAPI, WebSocket, Request, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 import traceback
@@ -30,6 +33,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from dotenv import load_dotenv
 from langdetect import detect
+
+# --- Logging Setup ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Ensure stdout handles UTF-8 (crucial for Windows consoles displaying emojis)
 if sys.platform == "win32":
@@ -40,7 +47,7 @@ if sys.platform == "win32":
 try:
     from faster_whisper import WhisperModel, decode_audio
 except ImportError:
-    print("❌ Critical Error: 'faster_whisper' module not found.\n   This is likely due to Python 3.14 incompatibility.\n   Please install Python 3.10, 3.11, or 3.12 and reinstall dependencies.")
+    logger.critical("❌ Critical Error: 'faster_whisper' module not found. Python 3.10-3.12 required.")
     sys.exit(1)
 
 
@@ -56,7 +63,7 @@ load_dotenv()
 # Configuration Constants
 SAMPLE_RATE = 16000          # Audio sample rate (Hz)
 ACTIVE_TIER = "high_quality" # Options: "low_latency", "balanced", "high_quality"
-SPEED = 1.1                  # Speech rate multiplier (1.1 is more natural than 1.2)
+SPEED = 1.0                  # Speech rate multiplier (1.0 is standard, 1.1 can be rushed)
 VOICE_PROFILE = "af_heart"   # Voice character selection
 
 # --- Tier Configuration ---
@@ -70,7 +77,7 @@ TIER_CONFIG = {
         "beam_size": 5 # Beam search: Essential for accuracy in Indian languages (Telugu, Hindi)
     },
     "high_quality": {
-        "whisper_model": "medium",
+        "whisper_model": "large-v3", # Upgraded to large-v3 for best Telugu/Indian language accuracy
         "beam_size": 5 # Beam search is essential for quality
     }
 }
@@ -177,8 +184,31 @@ def determine_agent_goal(state: AgentInternalState) -> GoalBasedStrategy:
 
     return GoalBasedStrategy(current_goal=candidate_goal, tactical_instruction=candidate_instruction)
 
-# Global Memory Store (Replaces simple session_histories)
-agent_memory_store: Dict[str, AgentInternalState] = {}
+# --- Persistence Layer (SQLite) ---
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, "sessions.db")
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, last_interaction REAL)")
+    logger.info("💽 Session database initialized.")
+
+def load_session(session_id: str) -> Optional[AgentInternalState]:
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.execute("SELECT data FROM sessions WHERE id = ?", (session_id,))
+            row = cursor.fetchone()
+            if row:
+                return AgentInternalState.model_validate_json(row[0])
+    except Exception as e:
+        logger.error(f"Failed to load session {session_id}: {e}")
+    return None
+
+def save_session(state: AgentInternalState):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("INSERT OR REPLACE INTO sessions (id, data, last_interaction) VALUES (?, ?, ?)",
+                     (state.session_id, state.model_dump_json(), state.last_interaction))
 
 # --- Pydantic Models for Structured Output ---
 class Metrics(BaseModel):
@@ -223,24 +253,27 @@ dysfluency_patterns:
     example: "I, um, need to, uh, think."
 
 language_specific_insights:
-  - language: "Hindi / Urdu"
-    triggers: "Aspirated stops (bh, ph, th, dh), retroflex sounds (ṭ, ḍ), and conjunct consonants (e.g., 'kya', 'pya')."
-    patterns: "Part-word repetitions on initial syllables are common. Speakers may switch to English (Code-switching) to avoid difficult Hindi words."
-  - language: "Telugu / Kannada"
-    triggers: "Geminate (double) consonants (e.g., 'kk', 'pp') and agglutinated word endings."
-    patterns: "Prolongation of vowels is frequent due to the melodic nature of Dravidian languages. Blocks often occur at the start of long, agglutinated phrases."
-  - language: "Tamil / Malayalam"
-    triggers: "Retroflex sounds ('zh', 'L'), initial plosives (k, p, t), and nasal clusters."
-    patterns: "Hard blocks on initial plosives. In Malayalam, stuttering may manifest as rapid repetition of the first syllable of a compound word."
-  - language: "Mandarin Chinese"
-    triggers: "Tone initiation (especially Tone 3 and 4), initial consonants."
-    patterns: "Stuttering often disrupts the tonal contour. Repetition of the initial consonant prevents the correct tone production. 'Tone Sandhi' rules may be misapplied during dysfluency."
-  - language: "Spanish"
-    triggers: "Trilled 'r' (erre), rapid syllable transitions, and verb conjugations."
-    patterns: "Syllable-timed rhythm leads to more syllable repetitions than sound repetitions. High prevalence of 'Cluttering' (rapid, unclear speech) alongside stuttering."
   - language: "English"
     triggers: "Plosives (p, b, t, d, k, g), fricatives (s, f), and sentence-initial vowels."
     patterns: "Whole-word repetitions and initial sound prolongations are classic indicators."
+  - language: "Hindi"
+    triggers: "Aspirated stops (bh, ph, th, dh), retroflex sounds (ṭ, ḍ), and conjunct consonants."
+    patterns: "Part-word repetitions on initial syllables are common. Code-switching to English is frequent."
+  - language: "Telugu"
+    triggers: "Geminate (double) consonants (e.g., 'kk', 'pp') and agglutinated word endings."
+    patterns: "Prolongation of vowels is frequent. Stuttering often breaks 'Sandhi' (word joining). Reconstruct split words carefully (e.g., 'na... na... nenu' -> 'nanu')."
+  - language: "Kannada"
+    triggers: "Geminate consonants, retroflex sounds."
+    patterns: "Similar to Telugu, vowel endings are crucial. Watch for blocks on initial plosives."
+  - language: "Tamil"
+    triggers: "Retroflex sounds ('zh', 'L'), initial plosives (k, p, t)."
+    patterns: "Hard blocks on initial plosives. Diglossia (formal vs colloquial) may cause hesitation."
+  - language: "Malayalam"
+    triggers: "Nasal clusters, retroflex sounds."
+    patterns: "Stuttering may manifest as rapid repetition of the first syllable of a compound word."
+  - language: "Bengali"
+    triggers: "Aspirated stops (bh, ph, dh), clusters with 'r' (e.g., 'pr', 'tr')."
+    patterns: "Vowel elongation is common. Repetitions often occur on the first syllable of polysyllabic words."
 
 boli_dataset_insights:
   - common_triggers: "Stop consonants (/p/, /t/, /k/), complex clusters (/str/, /br/, /pl/), and fricatives (/f/, /sh/, /th/)."
@@ -259,21 +292,31 @@ therapeutic_techniques:
   - technique: "Continuous Phonation"
     description: "Linking words together smoothly so that the voice continues to flow with minimal interruption, reducing the number of starts and stops."
     when_to_use: "Useful for reducing instances of initial-word blocks or repetitions."
+
+prevention_and_management:
+  - strategy: "Secondary Behavior Prevention"
+    description: "Identifying and reducing physical concomitants (eye blinking, head nodding) before they become ingrained."
+  - strategy: "Desensitization"
+    description: "Voluntary stuttering or 'bouncing' to reduce the fear of stuttering, which often fuels the severity of blocks."
+  - strategy: "Relapse Prevention"
+    description: "Regular practice of 'Pull-outs' (easing out of a stutter) and 'Cancellations' (pausing and re-saying the word) to maintain fluency."
+
 """
 # --- Agent Setup (Merged from agent_client.py) ---
 ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 if "0.0.0.0" in ollama_host:
     print("⚠️  Warning: OLLAMA_HOST is set to 0.0.0.0. Replacing with 127.0.0.1 for client connection.")
     ollama_host = ollama_host.replace("0.0.0.0", "127.0.0.1")
-print(f"🔌 Connecting to Ollama at: {ollama_host} (Default: 11434). Use OLLAMA_HOST env var to change.")
+logger.info(f"🔌 Connecting to Ollama at: {ollama_host}")
 knowledge_agent_ai = Agent(
-    model=Ollama(id="llama3.1:8b", host=ollama_host),
+    model=Ollama(id="llama3.1:8b", host=ollama_host, options={"temperature": 0.0}),
     tools=[],
     instructions=dedent(f"""\
-        You are an expert Speech Language Pathologist AI assistant specialized in English, Hindi, Telugu, Bengali, Marathi, Kannada, Tamil, Gujarati, Malayalam, Punjabi, Urdu, Odia, Assamese, Manipuri, Spanish, French, German, Japanese, and Mandarin Chinese.
+        You are an expert Speech Language Pathologist AI assistant specialized in multilingual speech therapy, capable of analyzing speech patterns in any provided language (including English, Spanish, French, German, Chinese, Hindi, and others).
         
         CORE DIRECTIVE: You must output ONLY a valid JSON object.
-        
+        CRITICAL: Do NOT hallucinate. In your analysis, ONLY cite words that appear in the user's input. Do not use words from other languages or examples.
+
         CHAIN OF THOUGHT REASONING:
         Before generating the JSON, you MUST provide a step-by-step reasoning process to explain your analysis.
         Enclose this reasoning strictly within <thought> and </thought> tags.
@@ -287,7 +330,7 @@ knowledge_agent_ai = Agent(
         Use 'language_specific_insights' to tailor your analysis based on the detected language.
 
         IN-CONTEXT LEARNING EXAMPLES (FEW-SHOT):
-        - Input: "I... I... I want to go."
+        - Input (English): "I... I... I want to go."
           Output:
           <thought>
           1. Detected language: English.
@@ -305,7 +348,7 @@ knowledge_agent_ai = Agent(
             "classification": "Developmental Stuttering",
             "demographics": "Child"
           }}
-        - Input: "Mujhe... mujhe... paani chahiye."
+        - Input (Hindi): "Mujhe... mujhe... paani chahiye."
           Output: {{
             "text": "Mujhe paani chahiye.",
             "english_translation": "I want water.",
@@ -317,7 +360,7 @@ knowledge_agent_ai = Agent(
             "classification": "Developmental Stuttering",
             "demographics": "Adult"
           }}
-        - Input: "నాకు... నాకు... ఆకలిగా ఉంది."
+        - Input (Telugu): "నాకు... నాకు... ఆకలిగా ఉంది."
           Output: {{
             "text": "నాకు ఆకలిగా ఉంది.",
             "english_translation": "I am hungry.",
@@ -333,12 +376,13 @@ knowledge_agent_ai = Agent(
         Your task is to analyze the provided speech transcription and populate the following JSON schema fields accurately.
 
         1. "text": (String) The corrected, fluent version of the speech.
-           - Remove ONLY disfluencies such as repetitions (e.g., "I-I-I"), prolongations (e.g., "ssss-snake"), blocks (silence), and interjections (e.g., "um", "uh", "like").
-           - STRICTLY PRESERVE the original words and vocabulary.
-           - DO NOT paraphrase, DO NOT use synonyms, and DO NOT fix grammar unless the error is a direct result of the stutter.
-           - **CRITICAL: Reconstruct Fragmented Words**: If the input contains repeated syllables that form a word, merge them.
+           - **GOAL**: Create a perfectly fluent, natural, and efficient sentence.
+           - **REMOVE ALL**: Repetitions ("I-I-I"), prolongations ("ssss-snake"), blocks (...), interjections ("um", "uh", "like"), and false starts.
+           - **REPAIR**: Fix any grammar or sentence structure that was broken by the stuttering.
+           - **RECONSTRUCT**: Merge fragmented syllables into whole words.
              * Example: "u... u... umbrella" -> "umbrella"
            - **Contextual Restoration**: If the stuttering has distorted a word (e.g. "mara" instead of "hamara" due to a block), restore the intended word based on the sentence context.
+             * Example: "namu... makin" -> "Namumkin" (Phonetic restoration).
              * Example: "ha ha ha ha mara ba ba barat ma ma ma han" -> "Hamara Bharat Mahan" (Correcting 'mara'->'Hamara', 'barat'->'Bharat', 'han'->'Mahan' based on the famous phrase).
            
            - If the input is mixed language (e.g., "Main market ja raha hoon"), KEEP IT MIXED ("Main market ja raha hoon").
@@ -346,7 +390,9 @@ knowledge_agent_ai = Agent(
            - CRITICAL: If the input text is in English, the output "text" MUST be in English. Do NOT translate English input to Hindi or any other language.
            - Example: "I... I... wanna go" -> "I wanna go" (NOT "I want to go").
            - For Hindi/Urdu/Indian Languages: Do NOT replace Urdu/colloquial words with pure Sanskritized/Formal versions (e.g., keep "zindagi" not "jeevan" if spoken).
-           - Script Consistency: Ensure the output script matches the input script (e.g. Devanagari -> Devanagari, Telugu -> Telugu, Tamil -> Tamil, Kannada -> Kannada, Malayalam -> Malayalam, Gujarati -> Gujarati). Do NOT transliterate to Latin/English script.
+           - **Dialect Preservation**: For Tamil, Telugu, Kannada, and Malayalam, do NOT convert colloquial/spoken forms (e.g., "vosthunna", "poren") to formal written forms (e.g., "vasthunnanu", "pogiren") unless the input is clearly formal. Preserve the speaker's natural register.
+           - Script Consistency: Ensure the output script matches the input script (e.g. Devanagari -> Devanagari, Telugu -> Telugu, Tamil -> Tamil, Kannada -> Kannada, Malayalam -> Malayalam, Bengali -> Bengali). Do NOT transliterate to Latin/English script.
+           - **Transliteration Handling**: If the input is in Latin script (e.g., "na peru..." for Telugu), the output MUST remain in Latin script. Do NOT convert it to the native script.
 
         2. "english_translation": (String) The English translation of the corrected "text".
            - REQUIRED if the input is not English.
@@ -360,14 +406,16 @@ knowledge_agent_ai = Agent(
              * <b>PR (Prolongation)</b>: Stretching sounds (e.g., "ssss-snake").
              * <b>B (Block)</b>: Silent pauses/stoppages.
              * <b>IN (Interjection)</b>: Fillers (e.g., "um", "uh").
-           - "rate": (Integer) The calculated fluency score (0-100). Return ONLY the integer value. Do NOT show the formula or calculation.
+           - "rate": (Integer) The calculated fluency score (0-100). Formula: 100 - (disfluencies / words * 100). If 0 disfluencies, rate is 100.
 
         4. "analysis": (String) A detailed and insightful clinical analysis of speech patterns, formatted as an HTML unordered list (<ul><li>...</li></ul>).
            - **Core Behaviors**: Identify specific dysfluency types (SR, WR, PR, B, IN) with examples.
+           - **Strict Citation**: When citing examples, YOU MUST USE THE EXACT WORDS FROM THE INPUT. Do not use words from other languages.
+           - **Intentional Repetition**: Distinguish between stuttering and intentional repetition for emphasis (e.g., poetic or dramatic repetition like "Tarikh par tarikh"). Do not flag these as dysfluencies.
            - **Linguistic Patterns**: Check for Boli Dataset triggers: Stop consonants (/p/, /t/, /k/), clusters (/str/, /br/), or fricatives.
-           - **Language Specifics**: Reference 'language_specific_insights' (e.g., tones in Mandarin, retroflexes in Indian languages).
            - **Contextual Insight**: Infer emotional state or cognitive load based on the content and speech rate.
            - **Formatting**: Use <b>bold tags</b> for key terms (e.g., "<b>Repetition</b>", "<b>Block</b>") to enhance readability.
+           - **Clinical Feedback**: Provide professional feedback similar to a Speech-Language Pathologist, noting severity and prognosis.
            - MUST BE IN ENGLISH, regardless of the input language.
 
         5. "suggestions": (String) Creative and evidence-based therapeutic interventions, formatted as an HTML unordered list (<ul><li>...</li></ul>).
@@ -375,6 +423,7 @@ knowledge_agent_ai = Agent(
            - **Rationale**: Briefly explain *why* the technique helps (e.g., "Reduces tension in the lips").
            - **Functional Application**: Suggest how to apply this in daily conversation (e.g., "Practice this technique while ordering coffee").
            - **Creative Drills**: Include engaging practice ideas (e.g., "Rhythmic speech practice using a metronome app").
+           - **Prevention & Cure**: Include strategies for preventing secondary behaviors and managing relapse (e.g., "Desensitization to reduce fear").
            - MUST BE IN ENGLISH.
 
         6. "soap": (Dictionary) Clinical documentation in SOAP format.
@@ -389,7 +438,7 @@ knowledge_agent_ai = Agent(
            - "Advanced": Low disfluency (<3%). Focus on intonation, prosody, public speaking confidence.
            
         IN-CONTEXT LEARNING EXAMPLES (FEW-SHOT):
-        - Input: "ha ha ha ha mara ba ba barat ma ma ma han"
+        - Input (Hindi/Mixed): "ha ha ha ha mara ba ba barat ma ma ma han"
           Output: {{
             "text": "Hamara Bharat Mahan.",
             "english_translation": "Our India is Great.",
@@ -401,7 +450,7 @@ knowledge_agent_ai = Agent(
             "classification": "Developmental Stuttering",
             "demographics": "Adult"
           }}
-        - Input: "H-h-hindi: म-म-मेरा न-न-नाम... अ... र-र-राहुल है, और म-म-मैं... द-द-दिल्ली से हूँ।"
+        - Input (Hindi): "H-h-hindi: म-म-मेरा न-न-नाम... अ... र-र-राहुल है, और म-म-मैं... द-द-दिल्ली से हूँ।"
           Output: {{
             "text": "Hindi: मेरा नाम राहुल है, और मैं दिल्ली से हूँ।",
             "english_translation": "My name is Rahul, and I am from Delhi.",
@@ -413,7 +462,7 @@ knowledge_agent_ai = Agent(
             "classification": "Developmental Stuttering",
             "demographics": "Adult"
           }}
-        - Input: "C-c-could you... c-could you t-t-tell me w-where the... the... [block]... st-station is l-l-located?"
+        - Input (English): "C-c-could you... c-could you t-t-tell me w-where the... the... [block]... st-station is l-l-located?"
           Output: {{
             "text": "Could you tell me where the station is located?",
             "english_translation": "",
@@ -421,6 +470,42 @@ knowledge_agent_ai = Agent(
             "analysis": "<ul><li><b>Block</b> before 'station'.</li><li><b>Word Repetition</b> on 'could'.</li></ul>",
             "suggestions": "<ul><li>Easy onset.</li></ul>",
             "soap": {{"s": "Anxious", "o": "Blocking", "a": "Moderate Stuttering", "p": "Therapy"}},
+            "level": "Intermediate",
+            "classification": "Developmental Stuttering",
+            "demographics": "Adult"
+          }}
+        - Input (Tamil): "E... en... en peyar... Raja."
+          Output: {{
+            "text": "En peyar Raja.",
+            "english_translation": "My name is Raja.",
+            "metrics": {{"words": 3, "disfluencies": 2, "rate": 60}},
+            "analysis": "<ul><li><b>Word Repetition</b> on 'en'.</li><li><b>Sound Repetition</b> on 'E'.</li></ul>",
+            "suggestions": "<ul><li>Pausing technique.</li></ul>",
+            "soap": {{"s": "Neutral", "o": "Repetition", "a": "Mild Disfluency", "p": "Monitor"}},
+            "level": "Beginner",
+            "classification": "Developmental Stuttering",
+            "demographics": "Adult"
+          }}
+        - Input (Kannada): "Nanna... nanna... hesaru... Ravi."
+          Output: {{
+            "text": "Nanna hesaru Ravi.",
+            "english_translation": "My name is Ravi.",
+            "metrics": {{"words": 3, "disfluencies": 1, "rate": 66}},
+            "analysis": "<ul><li><b>Word Repetition</b> on 'nanna'.</li></ul>",
+            "suggestions": "<ul><li>Easy onset.</li></ul>",
+            "soap": {{"s": "Calm", "o": "Repetition", "a": "Mild", "p": "Continue"}},
+            "level": "Beginner",
+            "classification": "Developmental Stuttering",
+            "demographics": "Adult"
+          }}
+        - Input (Bengali): "A... a... amar naam... Rabi."
+          Output: {{
+            "text": "Amar naam Rabi.",
+            "english_translation": "My name is Rabi.",
+            "metrics": {{"words": 3, "disfluencies": 2, "rate": 50}},
+            "analysis": "<ul><li><b>Sound Repetition</b> on 'A'.</li><li><b>Word Repetition</b> on 'amar'.</li></ul>",
+            "suggestions": "<ul><li>Rhythmic speech.</li></ul>",
+            "soap": {{"s": "Hesitant", "o": "Repetitions", "a": "Moderate", "p": "Therapy"}},
             "level": "Intermediate",
             "classification": "Developmental Stuttering",
             "demographics": "Adult"
@@ -476,8 +561,11 @@ knowledge_agent_ai = Agent(
 
 def extract_json_from_text(content: str, prompt_text: str) -> dict:
     """Robustly extracts and parses JSON from LLM output."""
+    # 0. Remove <thought> tags (Chain of Thought) to prevent interference with JSON parsing
+    content = re.sub(r'<thought>.*?</thought>', '', content, flags=re.DOTALL | re.IGNORECASE).strip()
+
     # 1. Strip markdown fences
-    content = re.sub(r'^```json\s*', '', content, flags=re.MULTILINE)
+    content = re.sub(r'^```[a-zA-Z0-9]*\s*', '', content, flags=re.MULTILINE)
     content = re.sub(r'^```\s*', '', content, flags=re.MULTILINE)
     content = re.sub(r'```$', '', content, flags=re.MULTILINE)
 
@@ -546,9 +634,13 @@ def extract_acoustic_features(audio_np: np.ndarray, sample_rate: int = 16000) ->
     struggle (energy bursts) or fricative prolongation (high ZCR).
     """
     try:
-        if len(audio_np) == 0:
-            return {}
+        if audio_np is None or len(audio_np) == 0:
+            return {"rms": 0.0, "zcr": 0.0, "variance": 0.0}
             
+        # Handle potential NaNs/Infs in the audio data
+        if not np.isfinite(audio_np).all():
+            audio_np = np.nan_to_num(audio_np)
+
         # RMS Energy (Loudness/Intensity) - Indicates vocal effort
         rms = np.sqrt(np.mean(audio_np**2))
         
@@ -559,55 +651,13 @@ def extract_acoustic_features(audio_np: np.ndarray, sample_rate: int = 16000) ->
         variance = np.var(audio_np)
             
         return {
-            "rms": float(rms),
-            "zcr": float(zcr),
-            "variance": float(variance)
+            "rms": float(rms) if np.isfinite(rms) else 0.0,
+            "zcr": float(zcr) if np.isfinite(zcr) else 0.0,
+            "variance": float(variance) if np.isfinite(variance) else 0.0
         }
     except Exception as e:
-        print(f"⚠️ Feature extraction failed: {e}")
-        return {}
-
-async def stream_knowledge_agent(prompt: str, language: str = "English", tone: str = "Professional", session_id: str = None, acoustic_features: dict = None):
-    """
-    Async generator that streams the agent's thought process and final JSON.
-    Yields: {"type": "thought"|"json", "content": ...}
-    """
-    if not session_id: session_id = "default"
-    if session_id not in agent_memory_store:
-        agent_memory_store[session_id] = AgentInternalState(session_id=session_id)
-    
-    agent_state = agent_memory_store[session_id]
-    agent_goal = determine_agent_goal(agent_state)
-    
-    history_str = "\n".join([f"User: {turn['user']}\nAssistant: {turn['assistant']}" for turn in agent_state.history[-3:]])
-    
-    acoustic_context = ""
-    if acoustic_features:
-        # Interpret features for the LLM
-        acoustic_context = f"\nACOUSTIC FEATURES: Energy(RMS)={acoustic_features.get('rms',0):.3f}, ZeroCrossingRate={acoustic_features.get('zcr',0):.3f}. High ZCR may indicate prolongation of fricatives. Low Energy may indicate blocks."
-
-    full_prompt = (
-        f"The user is speaking in {language}. Tone: {tone}.{acoustic_context}\n"
-        f"CURRENT AGENT GOAL: {agent_goal.current_goal}\n"
-        f"STRATEGY: {agent_goal.tactical_instruction}\n\n"
-        f"PREVIOUS CONVERSATION CONTEXT:\n{history_str}\n\n"
-        f"CURRENT INPUT:\n{json.dumps(prompt)}\n\n"
-        f"TASK: Analyze input. First <thought>...</thought>, then JSON."
-    )
-
-    # Stream response from Agno/Ollama
-    response_stream = knowledge_agent_ai.run(full_prompt, stream=True)
-    
-    buffer = ""
-    in_thought = False
-    
-    for chunk in response_stream:
-        content = chunk.content if hasattr(chunk, "content") else str(chunk)
-        buffer += content
-        
-        # Simple heuristic to stream thoughts as they come
-        # In a real scenario, we'd parse tags more robustly, but this works for streaming display
-        yield {"type": "chunk", "content": content}
+        logger.warning(f"⚠️ Feature extraction failed: {e}")
+        return {"rms": 0.0, "zcr": 0.0, "variance": 0.0}
 
 def knowledge_agent_client(prompt: str, language: str = "English", tone: str = "Professional", session_id: str = None, acoustic_features: dict = None):
     # Sanitize prompt to prevent JSON injection
@@ -616,19 +666,16 @@ def knowledge_agent_client(prompt: str, language: str = "English", tone: str = "
     # --- Agent Logic: Retrieve State & Determine Goal ---
     if not session_id:
         session_id = "default"
-    
-    if session_id not in agent_memory_store:
-        agent_memory_store[session_id] = AgentInternalState(session_id=session_id)
-    
-    # Memory Cleanup: Remove sessions inactive for > 1 hour
-    # Run this check occasionally (e.g., when store gets large)
-    if len(agent_memory_store) > 100:
-        now = time.time()
-        expired_sessions = [sid for sid, state in agent_memory_store.items() if now - state.last_interaction > 3600]
-        for sid in expired_sessions:
-            del agent_memory_store[sid]
 
-    agent_state = agent_memory_store[session_id]
+    # Load state from DB or create new
+    agent_state = load_session(session_id)
+    if not agent_state:
+        agent_state = AgentInternalState(session_id=session_id)
+
+    # Cleanup old sessions from DB (Optional: run periodically)
+    # with sqlite3.connect(DB_PATH) as conn:
+    #     conn.execute("DELETE FROM sessions WHERE last_interaction < ?", (time.time() - 86400 * 7,))
+
     agent_goal = determine_agent_goal(agent_state)
     
     # Construct Prompt with Goal & History
@@ -642,9 +689,9 @@ def knowledge_agent_client(prompt: str, language: str = "English", tone: str = "
         f"The user is speaking in {language}. Tone: {tone}.{acoustic_context}\n"
         f"CURRENT AGENT GOAL: {agent_goal.current_goal}\n"
         f"STRATEGY: {agent_goal.tactical_instruction}\n\n"
-        f"PREVIOUS CONVERSATION CONTEXT:\n{history_str}\n\n"
-        f"CURRENT INPUT:\n{safe_prompt}\n\n"
-        f"TASK: Analyze the input and return the result as a valid JSON object. STRICTLY PRESERVE ORIGINAL WORDS in 'text' field, only removing stutters."
+        f"--- HISTORY (FOR CONTEXT ONLY - DO NOT ANALYZE) ---\n{history_str}\n--- END HISTORY ---\n\n"
+        f"--- CURRENT INPUT (ANALYZE THIS TEXT ONLY) ---\n{safe_prompt}\n--- END CURRENT INPUT ---\n\n"
+        f"TASK: Analyze ONLY the text inside 'CURRENT INPUT' and return the result as a valid JSON object. STRICTLY PRESERVE ORIGINAL WORDS in 'text' field, only removing stutters.\nCRITICAL: In 'analysis', ONLY cite words present in the CURRENT INPUT. Do not hallucinate or analyze the history."
     )
     
     # Retry Logic: Try up to 2 times to get valid JSON
@@ -663,6 +710,7 @@ def knowledge_agent_client(prompt: str, language: str = "English", tone: str = "
                 
                 # --- Agent Logic: Update Internal Model ---
                 agent_state.update_model(prompt, data)
+                save_session(agent_state) # Persist to DB
                 
                 # Update the last strategy used for the NEXT turn's evaluation
                 agent_state.last_strategy = agent_goal.current_goal
@@ -672,11 +720,11 @@ def knowledge_agent_client(prompt: str, language: str = "English", tone: str = "
                 raise ValueError("JSON parsing failed")
 
         except Exception as e:
-            print(f"⚠️ Attempt {attempt+1} failed: {str(e)}")
+            logger.warning(f"⚠️ Attempt {attempt+1} failed: {str(e)}")
             
             # If this was the last attempt, return the fallback
             if attempt == max_retries:
-                print(f"ℹ️  All retries failed. Returning fallback.")
+                logger.error(f"ℹ️  All retries failed. Returning fallback.")
                 
                 raw_content = locals().get('content', '')
                 if not raw_content:
@@ -709,6 +757,7 @@ def knowledge_agent_client(prompt: str, language: str = "English", tone: str = "
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Clean up temporary files on startup to prevent disk clutter."""
+    init_db() # Initialize DB
     if os.path.exists("temp"):
         now = time.time()
         for filename in os.listdir("temp"):
@@ -718,46 +767,84 @@ async def lifespan(app: FastAPI):
                     if os.path.getmtime(file_path) < now - 86400:
                         os.unlink(file_path)
             except Exception as e:
-                print(f"⚠️ Failed to delete temp file {file_path}: {e}")
+                logger.warning(f"⚠️ Failed to delete temp file {file_path}: {e}")
     yield
 
 app = FastAPI(title="Fluency-Net", lifespan=lifespan)
 templates = Jinja2Templates(directory=".")
 
+# Enable CORS to prevent frontend connection issues
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Allow ALL origins (safest for local dev)
+    allow_credentials=False, # Disable credentials to allow wildcard origin
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # --- Setup Static & Temp Directories ---
 os.makedirs("static", exist_ok=True)
 os.makedirs("temp", exist_ok=True)
+MODELS_DIR = "models"
+os.makedirs(MODELS_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/temp", StaticFiles(directory="temp"), name="temp")
 
 def check_and_download_models():
-    """Ensures Kokoro models are present."""
+    """Ensures Kokoro models are present and valid."""
     models = [
         ("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx", "kokoro-v1.0.onnx"),
         ("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", "voices-v1.0.bin")
     ]
     for url, filename in models:
-        if not os.path.exists(filename):
-            print(f"⬇️ Downloading missing model: {filename}...")
+        file_path = os.path.join(MODELS_DIR, filename)
+        # Check if file exists and is larger than 1KB (to filter out corrupt/HTML files)
+        if not os.path.exists(file_path) or os.path.getsize(file_path) < 1024:
+            logger.info(f"⬇️ Downloading missing model: {filename}...")
             try:
-                resp = requests.get(url)
-                with open(filename, "wb") as f:
-                    f.write(resp.content)
-                print(f"✅ Downloaded {filename}")
+                temp_filename = file_path + ".tmp"
+                with requests.get(url, stream=True) as r:
+                    r.raise_for_status()
+                    with open(temp_filename, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                shutil.move(temp_filename, file_path)
+                logger.info(f"✅ Downloaded {filename}")
             except Exception as e:
-                print(f"❌ Failed to download {filename}: {e}")
+                logger.error(f"❌ Failed to download {filename}: {e}")
+                if os.path.exists(temp_filename):
+                    os.remove(temp_filename)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
 
 # --- Initialize Models ---
+# Configure eSpeak NG for Windows if not in PATH (Required for Kokoro)
+if sys.platform == "win32" and shutil.which("espeak-ng") is None:
+    possible_paths = [
+        r"C:\Program Files\eSpeak NG\espeak-ng.exe",
+        r"C:\Program Files (x86)\eSpeak NG\espeak-ng.exe"
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            logger.info(f"ℹ️  Found eSpeak NG at: {path}")
+            os.environ["PHONEMIZER_ESPEAK_PATH"] = path
+            # Also add to PATH for subprocess calls
+            os.environ["PATH"] += f";{os.path.dirname(path)}"
+            break
+
 check_and_download_models()
 try:
-    kokoro = Kokoro("kokoro-v1.0.onnx", "voices-v1.0.bin")
+    kokoro = Kokoro(os.path.join(MODELS_DIR, "kokoro-v1.0.onnx"), os.path.join(MODELS_DIR, "voices-v1.0.bin"))
 except Exception as e:
-    print(f"⚠️ Kokoro initialization failed: {e}")
+    logger.error(f"⚠️ Kokoro initialization failed: {e}")
+    logger.info("ℹ️  Deleting potentially corrupt model files. They will be re-downloaded on next run.")
+    if os.path.exists(os.path.join(MODELS_DIR, "kokoro-v1.0.onnx")): os.remove(os.path.join(MODELS_DIR, "kokoro-v1.0.onnx"))
+    if os.path.exists(os.path.join(MODELS_DIR, "voices-v1.0.bin")): os.remove(os.path.join(MODELS_DIR, "voices-v1.0.bin"))
     kokoro = None
 
 # Initialize Whisper (Load once)
 whisper_model_size = TIER_CONFIG.get(ACTIVE_TIER, {}).get("whisper_model", "base")
-print(f"⏳ Loading Whisper {whisper_model_size} model (Int8 Quantization enabled)...")
+print(f"⏳ Loading Whisper '{whisper_model_size}' model... (This may take a few minutes on first run)")
 whisper_model = WhisperModel(whisper_model_size, device="cpu", compute_type="int8")
 
 # --- Internationalization (i18n) ---
@@ -798,9 +885,9 @@ translations = {
         "status_stopped": "Stopped",
         "transcription_placeholder": "Transcription...",
     },
-    "mr": { "title": "Vocal Agent - Marathi", "header": "🎙️ Vocal Agent", "subheader": "AI Assistant", "start_button": "Record", "stop_button": "Stop", "status_ready": "Ready", "status_connected": "Listening", "status_disconnected": "Disconnected", "status_stopped": "Stopped", "transcription_placeholder": "..." },
     "kn": { "title": "Vocal Agent - Kannada", "header": "🎙️ Vocal Agent", "subheader": "AI Assistant", "start_button": "Record", "stop_button": "Stop", "status_ready": "Ready", "status_connected": "Listening", "status_disconnected": "Disconnected", "status_stopped": "Stopped", "transcription_placeholder": "..." },
     "ta": { "title": "Vocal Agent - Tamil", "header": "🎙️ Vocal Agent", "subheader": "AI Assistant", "start_button": "Record", "stop_button": "Stop", "status_ready": "Ready", "status_connected": "Listening", "status_disconnected": "Disconnected", "status_stopped": "Stopped", "transcription_placeholder": "..." },
+    "ml": { "title": "Vocal Agent - Malayalam", "header": "🎙️ Vocal Agent", "subheader": "AI Assistant", "start_button": "Record", "stop_button": "Stop", "status_ready": "Ready", "status_connected": "Listening", "status_disconnected": "Disconnected", "status_stopped": "Stopped", "transcription_placeholder": "..." },
     "hi": {
         "title": "वोकल एजेंट - स्टटर2फ्लुएंट",
         "header": "🎙️ वोकल एजेंट",
@@ -812,66 +899,6 @@ translations = {
         "status_disconnected": "डिस्कनेक्ट हो गया",
         "status_stopped": "⏹️ रुक गया",
         "transcription_placeholder": "ट्रांसक्रिप्शन यहाँ दिखाई देगा...",
-    },
-    "es": {
-        "title": "Agente Vocal - Stutter2Fluent",
-        "header": "🎙️ Agente Vocal",
-        "subheader": "Asistente de IA de voz a voz en tiempo real",
-        "start_button": "Iniciar grabación",
-        "stop_button": "Detener grabación",
-        "status_ready": "Listo para conectar...",
-        "status_connected": "🔴 Conectado y escuchando...",
-        "status_disconnected": "Desconectado",
-        "status_stopped": "⏹️ Detenido",
-        "transcription_placeholder": "La transcripción aparecerá aquí...",
-    },
-    "fr": {
-        "title": "Agent Vocal - Stutter2Fluent",
-        "header": "🎙️ Agent Vocal",
-        "subheader": "Assistant IA vocal en temps réel",
-        "start_button": "Démarrer l'enregistrement",
-        "stop_button": "Arrêter l'enregistrement",
-        "status_ready": "Prêt à se connecter...",
-        "status_connected": "🔴 Connecté et écoute...",
-        "status_disconnected": "Déconnecté",
-        "status_stopped": "⏹️ Arrêté",
-        "transcription_placeholder": "La transcription apparaîtra ici...",
-    },
-    "de": {
-        "title": "Vokal-Agent - Stutter2Fluent",
-        "header": "🎙️ Vokal-Agent",
-        "subheader": "Echtzeit-Sprach-KI-Assistent",
-        "start_button": "Aufnahme starten",
-        "stop_button": "Aufnahme stoppen",
-        "status_ready": "Bereit zum Verbinden...",
-        "status_connected": "🔴 Verbunden & Hören...",
-        "status_disconnected": "Getrennt",
-        "status_stopped": "⏹️ Gestoppt",
-        "transcription_placeholder": "Transkription erscheint hier...",
-    },
-    "zh": {
-        "title": "语音代理 - Stutter2Fluent",
-        "header": "🎙️ 语音代理",
-        "subheader": "实时语音AI助手",
-        "start_button": "开始录音",
-        "stop_button": "停止录音",
-        "status_ready": "准备连接...",
-        "status_connected": "🔴 已连接并正在聆听...",
-        "status_disconnected": "已断开",
-        "status_stopped": "⏹️ 已停止",
-        "transcription_placeholder": "转录将在此处显示...",
-    },
-    "ja": {
-        "title": "ボーカルエージェント - Stutter2Fluent",
-        "header": "🎙️ ボーカルエージェント",
-        "subheader": "リアルタイム音声AIアシスタント",
-        "start_button": "録音開始",
-        "stop_button": "録音停止",
-        "status_ready": "接続準備完了...",
-        "status_connected": "🔴 接続中 & リスニング中...",
-        "status_disconnected": "切断されました",
-        "status_stopped": "⏹️ 停止",
-        "transcription_placeholder": "文字起こしはここに表示されます...",
     }
 }
 
@@ -924,41 +951,37 @@ async def api_process(
 
 async def tts_router(text: str, lang: str, voice_id: str = None, speed: float = SPEED) -> Optional[str]:
     """Selects a TTS engine based on language and returns a URL to the generated audio file."""
-    print(f"🎤 Routing TTS for language: {lang}")
+    logger.info(f"🎤 Routing TTS for language: {lang}, Voice: {voice_id}")
     lang = lang.strip().lower()
     
     if not text or not text.strip():
         print("⚠️ TTS received empty text. Skipping generation.")
         return None
-    
+
     # Validation: Ensure voice matches language. If non-English, discard English-specific voices.
     if voice_id and lang != "en":
-        if voice_id.startswith("af_") or "en-US" in voice_id:
+        if voice_id.startswith("af_") or (voice_id.startswith("en-") and not lang.startswith("en")):
              voice_id = None
 
     # Determine Voice
     if not voice_id:
         # Default voice mapping
         defaults = {
-            "en": VOICE_PROFILE,
+            "en": "af_heart",
             "hi": "hi-IN-MadhurNeural",
             "bn": "bn-IN-BashkarNeural",
             "te": "te-IN-MohanNeural",
-            "mr": "mr-IN-ManoharNeural",
             "ta": "ta-IN-ValluvarNeural",
             "kn": "kn-IN-GaganNeural",
             "ml": "ml-IN-MidhunNeural",
-            "gu": "gu-IN-NiranjanNeural",
-            "pa": "pa-IN-OjasNeural",
-            "ur": "ur-IN-SalmanNeural",
             "es": "es-ES-AlvaroNeural",
-            "zh": "zh-CN-YunxiNeural",
             "fr": "fr-FR-HenriNeural",
-            "de": "de-DE-ConradNeural",
+            "de": "de-DE-KillianNeural",
+            "zh": "zh-CN-YunxiNeural",
             "ja": "ja-JP-KeitaNeural",
+            "ru": "ru-RU-DmitryNeural",
         }
-        # Fallback to English if language not found, or use specific default
-        voice_id = defaults.get(lang, "en-US-ChristopherNeural")
+        voice_id = defaults.get(lang, "af_heart")
 
     # Check if we should use Kokoro (English only, model loaded, and voice is a Kokoro voice)
     use_kokoro = lang == "en" and kokoro is not None and voice_id.startswith("af_")
@@ -967,7 +990,7 @@ async def tts_router(text: str, lang: str, voice_id: str = None, speed: float = 
     mime_type = "audio/wav"
 
     if use_kokoro:
-        print(f"   Using Kokoro TTS (English) - {voice_id}")
+        logger.info(f"   Using Kokoro TTS (English) - {voice_id}")
         # Run blocking Kokoro call in executor
         loop = asyncio.get_running_loop()
         samples, sample_rate = await loop.run_in_executor(None, lambda: kokoro.create(text, voice=voice_id, speed=speed, lang="en-us"))
@@ -982,7 +1005,7 @@ async def tts_router(text: str, lang: str, voice_id: str = None, speed: float = 
             voice_id = "en-US-ChristopherNeural"
             
         # Use edge-tts for other languages
-        print(f"   Using edge-tts: {voice_id}")
+        logger.info(f"   Using edge-tts: {voice_id}")
         rate_str = f"{int((speed - 1.0) * 100):+d}%"
         try:
             communicate = edge_tts.Communicate(text, voice_id, rate=rate_str)
@@ -992,12 +1015,11 @@ async def tts_router(text: str, lang: str, voice_id: str = None, speed: float = 
                     audio_data += chunk["data"]
             mime_type = "audio/mpeg" # EdgeTTS outputs mp3 by default
         except edge_tts.exceptions.NoAudioReceived:
-            print(f"⚠️ EdgeTTS NoAudioReceived with voice {voice_id}. Trying fallback voice...")
+            logger.warning(f"⚠️ EdgeTTS NoAudioReceived with voice {voice_id}. Trying fallback voice...")
             
             # Smart Fallback: Try swapping gender/voice if the primary fails
             fallbacks = {
                 "te-IN-MohanNeural": "te-IN-ShrutiNeural",
-                "te-IN-ShrutiNeural": "te-IN-MohanNeural",
                 "ta-IN-ValluvarNeural": "ta-IN-PallaviNeural",
                 "kn-IN-GaganNeural": "kn-IN-SapnaNeural",
                 "ml-IN-MidhunNeural": "ml-IN-SobhanaNeural",
@@ -1006,7 +1028,12 @@ async def tts_router(text: str, lang: str, voice_id: str = None, speed: float = 
             
             fallback_voice = fallbacks.get(voice_id)
             if fallback_voice:
-                print(f"🔄 Retrying with fallback voice: {fallback_voice}")
+                # STRICT GENDER CHECK: Only allow fallback if gender matches
+                if get_voice_gender(fallback_voice) != get_voice_gender(voice_id):
+                    logger.warning(f"⚠️ Fallback voice {fallback_voice} has different gender. Skipping to prevent confusion.")
+                    return None
+
+                logger.info(f"🔄 Retrying with fallback voice: {fallback_voice}")
                 try:
                     communicate = edge_tts.Communicate(text, fallback_voice, rate=rate_str)
                     async for chunk in communicate.stream():
@@ -1014,12 +1041,12 @@ async def tts_router(text: str, lang: str, voice_id: str = None, speed: float = 
                             audio_data += chunk["data"]
                     mime_type = "audio/mpeg"
                 except Exception as e2:
-                    print(f"❌ Fallback EdgeTTS failed: {e2}")
+                    logger.error(f"❌ Fallback EdgeTTS failed: {e2}")
                     return None
             else:
                 return None
         except Exception as e:
-            print(f"❌ EdgeTTS failed: {e}")
+            logger.error(f"❌ EdgeTTS failed: {e}")
             return None
         
     if audio_data:
@@ -1057,7 +1084,7 @@ async def process_upload(
             with open(temp_filename, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             size_mb = os.path.getsize(temp_filename) / (1024 * 1024)
-            print(f"📂 Received upload: {filename} ({size_mb:.2f} MB)")
+            logger.info(f"📂 Received upload: {filename} ({size_mb:.2f} MB)")
         await loop.run_in_executor(None, save_file_blocking)
         return await process_audio_pipeline(temp_filename, language, voice, speed, tone, session_id, is_text_input=is_text)
     finally:
@@ -1089,8 +1116,13 @@ async def process_url(
         def download_stream():
             # Use a browser-like User-Agent to avoid 403 Forbidden on some direct links
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            with requests.get(url, stream=True, timeout=3600, headers=headers) as r:
+            # Add size limit check (e.g., 50MB)
+            with requests.get(url, stream=True, timeout=60, headers=headers) as r:
                 r.raise_for_status()
+                
+                content_length = r.headers.get('content-length')
+                if content_length and int(content_length) > 50 * 1024 * 1024:
+                    raise ValueError("File too large (Max 50MB)")
                 
                 # Validate Content-Type to prevent downloading HTML pages as media
                 content_type = r.headers.get('Content-Type', '').lower()
@@ -1131,45 +1163,32 @@ LANGUAGE_NAMES = {
     "hi": "Hindi",
     "te": "Telugu",
     "bn": "Bengali",
-    "mr": "Marathi",
     "kn": "Kannada",
     "ta": "Tamil",
+    "ml": "Malayalam",
     "es": "Spanish",
     "fr": "French",
     "de": "German",
-    "zh": "Mandarin Chinese",
+    "zh": "Chinese",
     "ja": "Japanese",
-    "gu": "Gujarati",
-    "ml": "Malayalam",
-    "pa": "Punjabi",
-    "ur": "Urdu",
-    "or": "Odia",
-    "as": "Assamese",
-    "mni": "Manipuri"
+    "ru": "Russian"
 }
 
-def is_video_file(filename: str) -> bool:
-    """Checks if the file has a video extension."""
-    video_exts = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.wmv', '.mpeg', '.mpg', '.m4v', '.3gp'}
-    return os.path.splitext(filename)[1].lower() in video_exts
-
-def has_video_stream(file_path: str) -> bool:
-    """Checks if the file contains a video stream using ffmpeg."""
-    if shutil.which("ffmpeg") is None:
-        return False
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-i", file_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="ignore"
-        )
-        return "Video:" in result.stderr
-    except Exception:
-        return False
+INITIAL_PROMPTS = {
+    "hi": "नमस्ते, Namaste, म... म... मेरा नाम... Mera naam Rahul hai.",
+    "te": "నమస్కారం. నా... నా... పేరు రవి. Namaskaram, Na... na... peru Ravi.",
+    "ta": "வணக்கம். என்... என்... பெயர் ராஜா. Vanakkam, En... en... peyar Raja.",
+    "kn": "ನಮಸ್ಕಾರ. ನನ್ನ... ನನ್ನ... ಹೆಸರು ರವಿ. Namaskara, Nanna... nanna... hesaru Ravi.",
+    "ml": "നമസ്കാരം. എന്റെ... എന്റെ... പേര് രാഹുൽ. Namaskaram, Ente... ente... peru Rahul.",
+    "bn": "নমস্কার, Namaskar, আ... আ... আমার নাম... Amar naam Rabi.",
+    "en": "Umm, I... I... Hello, my name is... my name is John.",
+    "es": "Hola, me... me... me llamo... me llamo Juan.",
+    "fr": "Bonjour, je... je... je m'appelle... je m'appelle Pierre.",
+    "de": "Hallo, ich... ich... ich heiße... ich heiße Hans.",
+    "zh": "你好，我... 我... 我的名字是... 李明。",
+    "ja": "こんにちは、私... 私... 私の名前は... 田中... 田中です。",
+    "ru": "Привет, меня... меня... меня зовут... Иван."
+}
 
 SUPPORTED_EXTENSIONS = {
     # Audio
@@ -1178,73 +1197,10 @@ SUPPORTED_EXTENSIONS = {
     '.mp4', '.mkv', '.mov', '.avi', '.webm', '.flv', '.wmv', '.mpeg', '.mpg', '.m4v', '.3gp'
 }
 
-def merge_audio_video(video_path: str, audio_url: str) -> Optional[str]:
-    """Merges new audio with original video using ffmpeg."""
-    
-    try:
-        # Convert URL path (e.g. /temp/file.mp3) to system path (temp/file.mp3)
-        # Use absolute paths to prevent CWD issues
-        base_dir = os.getcwd()
-        audio_rel_path = audio_url.lstrip("/")
-        audio_path = os.path.join(base_dir, audio_rel_path)
-        video_abs_path = os.path.abspath(video_path)
-
-        if not os.path.exists(audio_path):
-            print(f"❌ Audio file for merge not found: {audio_path}")
-            return None
-        
-        # Determine output extension based on input to ensure container compatibility with -c:v copy
-        _, input_ext = os.path.splitext(video_path)
-        # Force output to .mp4 or .webm for browser compatibility (e.g. .avi -> .mp4)
-        output_ext = ".webm" if input_ext.lower() == ".webm" else ".mp4"
-        output_filename = f"{uuid.uuid4()}_output{output_ext}"
-        temp_output_path = os.path.join(base_dir, "temp", output_filename)
-
-        if shutil.which("ffmpeg") is None:
-            print("⚠️ ffmpeg not found. Skipping video merge.")
-            return None
-
-        # Select audio codec based on container to ensure validity
-        # WebM uses libopus. MP4 uses AAC.
-        audio_codec = "aac"
-        if output_ext == ".webm":
-            audio_codec = "libopus"
-
-        # ffmpeg: replace audio in video
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", video_abs_path,
-            "-i", audio_path,
-            "-c:v", "copy", # Copy video stream (fast)
-            "-c:a", audio_codec,  # Encode audio (aac or libopus)
-            "-ac", "2", # Force stereo to prevent channel layout errors
-            "-strict", "-2", # Allow experimental codecs if needed
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-shortest",    # Cut to shortest stream (usually audio is shorter due to stutter removal)
-            temp_output_path
-        ]
-        # Run ffmpeg, suppressing input to prevent hangs
-        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
-        
-        # Return URL path instead of Base64 to handle large files safely
-        return f"/temp/{output_filename}"
-    except Exception as e:
-        print(f"❌ Video merge failed: {e}")
-        return None
-    finally:
-        # 
-        # Do not delete audio_path here, as it is the output of tts_router and might be used by the frontend audio player
-        # Do NOT remove temp_output_path here; it is served statically to the frontend.
-        # It will be cleaned up on next server restart via lifespan.
-        pass
-
 async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice_pref, speed_pref=None, tone_pref="Professional", session_id=None, is_text_input=False):
     # Initialize URLs early for error safety across the entire function scope
-    input_video_url = None
     input_audio_url = None
-    has_video = False
-    acoustic_features = {}
+    acoustic_features = {"rms": 0.0, "zcr": 0.0, "variance": 0.0}
 
     try:
         loop = asyncio.get_running_loop()
@@ -1259,15 +1215,7 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
             # Convert system path to web URL (e.g. temp/file.mp4 -> /temp/file.mp4)
             web_path = "/" + input_data.replace("\\", "/")
             
-            # Check if it is effectively a video file (has video stream)
-            if is_video_file(input_data):
-                 has_video = await loop.run_in_executor(None, lambda: has_video_stream(input_data))
-            
-            if has_video:
-                input_video_url = web_path
-                input_audio_url = web_path # Fallback for audio players
-            else:
-                input_audio_url = web_path
+            input_audio_url = web_path
 
         if is_text_input:
             # 1. Bypass Transcription for Text Input (Regeneration)
@@ -1294,7 +1242,7 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
                 acoustic_features = extract_acoustic_features(audio_np)
                 print(f"📊 Acoustic Features Extracted: RMS={acoustic_features.get('rms',0):.3f}, ZCR={acoustic_features.get('zcr',0):.3f}")
             except Exception as e:
-                print(f"⚠️ Acoustic Feature Extraction failed (Audio decoding error): {e}")
+                logger.warning(f"⚠️ Acoustic Feature Extraction failed (Audio decoding error): {e}")
 
             tiers_to_try = [ACTIVE_TIER]
             if ACTIVE_TIER == "low_latency":
@@ -1311,15 +1259,41 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
                 def transcribe_blocking(tier):
                     tier_settings = TIER_CONFIG.get(tier, TIER_CONFIG["low_latency"])
                     current_beam_size = tier_settings.get("beam_size", 1)
-                    print(f"🎤 Transcribing with Whisper ({whisper_model_size} model, tier={tier}, beam_size={current_beam_size})...")
+                    
+                    # --- ISOLATION: File Processing Specific Logic ---
+                    # For non-English languages, we enforce a higher beam size to ensure accuracy on stuttered speech.
+                    # This overrides the tier setting specifically for this pipeline.
+                    if lang_pref and lang_pref not in ["auto", "en"]:
+                        current_beam_size = max(current_beam_size, 5)
+
+                    logger.info(f"🎤 Transcribing with Whisper ({whisper_model_size} model, tier={tier}, beam_size={current_beam_size})...")
                     try:
                         # Use pre-decoded audio_np if available, otherwise fallback to input_data
                         source = audio_np if audio_np is not None else (io.BytesIO(input_data) if isinstance(input_data, bytes) else input_data)
                         
-                        segments_gen, info = whisper_model.transcribe(source, beam_size=current_beam_size, vad_filter=True, word_timestamps=False, condition_on_previous_text=False)
+                        # Pass language preference to Whisper if specified
+                        transcribe_kwargs = {
+                            "beam_size": current_beam_size,
+                            "vad_filter": True,
+                            "vad_parameters": dict(min_silence_duration_ms=2000, speech_pad_ms=500), # Allow 2s silence for blocks, add padding to catch start/end
+                            "word_timestamps": False,
+                            "condition_on_previous_text": False, # Prevents looping on stutters
+                            "patience": 2.0, # Explore more decoding paths (Critical for Telugu accuracy)
+                            "no_speech_threshold": 0.3, # Highly sensitive to speech (default 0.6)
+                            "log_prob_threshold": None # Do not discard low confidence speech (Hear everything)
+                        }
+                        if lang_pref != "auto":
+                            transcribe_kwargs["language"] = lang_pref
+                            # Disable temperature fallback to prevent switching languages on low confidence
+                            transcribe_kwargs["temperature"] = 0.0
+                            # Add initial prompt to guide the model towards the correct script and context
+                            if lang_pref in INITIAL_PROMPTS:
+                                transcribe_kwargs["initial_prompt"] = INITIAL_PROMPTS[lang_pref]
+
+                        segments_gen, info = whisper_model.transcribe(source, **transcribe_kwargs)
                         return list(segments_gen), info
                     except Exception as e:
-                        print(f"❌ Whisper Transcription Error: {e}")
+                        logger.error(f"❌ Whisper Transcription Error: {e}")
                         return [], None
                 
                 segments, info = await loop.run_in_executor(None, lambda: transcribe_blocking(attempt_tier))
@@ -1340,22 +1314,20 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
                     break
                 else:
                     if attempt_tier != tiers_to_try[-1]:
-                        print(f"⚠️ Empty result with {attempt_tier} tier. Retrying with next tier...")
+                        logger.warning(f"⚠️ Empty result with {attempt_tier} tier. Retrying with next tier...")
             
             if info is None:
                 raise ValueError("Audio transcription failed. The audio file might be corrupt or unsupported.")
 
         # Handle empty transcription
         if not transcribed_text:
-            print("⚠️ Whisper produced an empty transcription. Stopping pipeline.")
+            logger.warning("⚠️ Whisper produced an empty transcription. Stopping pipeline.")
             return {
                 "status": "error",
                 "message": "No speech was detected in the audio. Please try recording again.",
                 "input_audio_url": input_audio_url,
-                "input_video_url": input_video_url,
                 "input_text": "(No speech detected)",
                 "output_audio_url": None,
-                "output_video_url": None,
                 "output_text": "",
                 "analysis": {},
                 "response": {},
@@ -1397,18 +1369,25 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
                     latin_ratio = latin_count / len(alpha_chars)
 
                 # Languages that typically use non-Latin scripts
-                non_latin_langs = ['hi', 'te', 'bn', 'mr', 'kn', 'ta', 'gu', 'ml', 'pa', 'or', 'as', 'ur', 'zh', 'ja', 'ru', 'ar']
+                non_latin_langs = ['hi', 'te', 'bn', 'kn', 'ta', 'ml', 'zh', 'ja', 'ru']
+                # Indian languages often use Latin script (transliteration)
+                transliteration_friendly = ['hi', 'te', 'bn', 'kn', 'ta', 'ml']
+                
                 text_lang = detect(transcribed_text)
 
-                print(f"🔍 Auto-Detect Debug: Whisper={detected_lang}, TextDetect={text_lang}, LatinRatio={latin_ratio:.2f}")
+                logger.info(f"🔍 Auto-Detect Debug: Whisper={detected_lang}, TextDetect={text_lang}, LatinRatio={latin_ratio:.2f}")
 
-                if (detected_lang in non_latin_langs and latin_ratio > 0.5) or (text_lang == 'en' and detected_lang != 'en'):
-                     print(f"⚠️ Language conflict detected. Defaulting to English.")
+                # Logic update: Only default to English if it's NOT a transliteration-friendly language
+                if (detected_lang in non_latin_langs and detected_lang not in transliteration_friendly and latin_ratio > 0.5):
+                     logger.info(f"⚠️ Language conflict detected (Script mismatch). Defaulting to English.")
+                     final_lang = 'en'
+                elif (text_lang == 'en' and detected_lang != 'en' and detected_lang not in transliteration_friendly):
+                     # If text detection says English strongly, and Whisper disagrees, but it's not a transliterated lang
                      final_lang = 'en'
                 else:
                      final_lang = detected_lang
             except Exception as e:
-                print(f"⚠️ Auto-detection heuristic failed: {e}")
+                logger.warning(f"⚠️ Auto-detection heuristic failed: {e}")
                 final_lang = detected_lang
         else:
             final_lang = lang_pref
@@ -1438,11 +1417,6 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
         corrected_text = ai_data.get("text", "")
         output_audio_url = await tts_router(corrected_text, final_lang, voice_pref, speed=final_speed)
         
-        # 3.5 Video Processing (Dubbing)
-        output_video_url = None
-        # if isinstance(input_data, str) and os.path.exists(input_data) and has_video and output_audio_url:
-        #      output_video_url = await loop.run_in_executor(None, lambda: merge_audio_video(input_data, output_audio_url))
-
         # 4. Calculate Metrics (WER / Correction Rate)
         # We treat the "Corrected Text" as the Reference (Ground Truth) and Input as Hypothesis
         wer_score = 0.0
@@ -1454,179 +1428,83 @@ async def process_audio_pipeline(input_data: Union[bytes, str], lang_pref, voice
 
         return {
             "input_audio_url": input_audio_url,
-            "input_video_url": input_video_url,
             "input_text": transcribed_text,
             "output_audio_url": output_audio_url,
-            "output_video_url": output_video_url,
             "output_text": corrected_text,
             "analysis": ai_data,
-            "response": {**ai_data, "audio_url": output_audio_url, "video_url": output_video_url, "input_audio_url": input_audio_url, "input_video_url": input_video_url}, # For new UI compatibility
+            "response": {**ai_data, "audio_url": output_audio_url, "input_audio_url": input_audio_url, "acoustic_features": acoustic_features}, # For new UI compatibility
             "metrics": {"wer": wer_score},
             "detected_language": detected_lang,
             "status": "success",
             "transcription": transcribed_text
         }
     except Exception as e:
-        print("❌ Pipeline Error:")
+        logger.error("❌ Pipeline Error:")
         traceback.print_exc()
         return {
             "status": "error",
             "message": str(e),
             "input_audio_url": input_audio_url,
-            "input_video_url": input_video_url,
             "transcription": "(Error)"
         }
 
 @app.get("/voices")
 def get_voices():
-    return {
+    logger.info("🎤 Serving voice list...")
+    # Prevent browser caching of the voice list to ensure new voices appear immediately
+    headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+
+    return JSONResponse(content={
         "en": [
-            {"id": "af_heart", "name": "Heart (Warm)"},
-            {"id": "af_sky", "name": "Sky (Clear)"},
-            {"id": "af_bella", "name": "Bella (Dynamic)"}
+            {"id": "af_heart", "name": "Heart (Female - US - Premium)"},
+            {"id": "en-GB-SoniaNeural", "name": "Sonia (Female - UK)"},
+            {"id": "en-GB-RyanNeural", "name": "Ryan (Male - UK)"},
+            {"id": "en-IN-NeerjaNeural", "name": "Neerja (Female - Indian Accent)"},
+            {"id": "en-IN-PrabhatNeural", "name": "Prabhat (Male - Indian Accent)"},
+            {"id": "hi-IN-MadhurNeural", "name": "Madhur (Male - Hindi Accent for English)"},
+            {"id": "hi-IN-SwaraNeural", "name": "Swara (Female - Hindi Accent for English)"},
+            {"id": "te-IN-MohanNeural", "name": "Mohan (Male - Telugu Accent for English)"},
+            {"id": "te-IN-ShrutiNeural", "name": "Shruti (Female - Telugu Accent for English)"}
         ],
         "hi": [
-            {"id": "hi-IN-MadhurNeural", "name": "Madhur (Male)"},
-            {"id": "hi-IN-SwaraNeural", "name": "Swara (Female)"}
+            {"id": "hi-IN-MadhurNeural", "name": "Madhur (Male)"}
         ],
         "te": [
-            {"id": "te-IN-MohanNeural", "name": "Mohan (Male)"},
-            {"id": "te-IN-ShrutiNeural", "name": "Shruti (Female)"}
+            {"id": "te-IN-MohanNeural", "name": "Mohan (Male)"}
         ],
         "bn": [
-            {"id": "bn-IN-BashkarNeural", "name": "Bashkar (Male)"},
-            {"id": "bn-IN-TanishaaNeural", "name": "Tanishaa (Female)"}
-        ],
-        "mr": [
-            {"id": "mr-IN-ManoharNeural", "name": "Manohar (Male)"},
-            {"id": "mr-IN-AarohiNeural", "name": "Aarohi (Female)"}
+            {"id": "bn-IN-BashkarNeural", "name": "Bashkar (Male)"}
         ],
         "kn": [
-            {"id": "kn-IN-GaganNeural", "name": "Gagan (Male)"},
-            {"id": "kn-IN-SapnaNeural", "name": "Sapna (Female)"}
+            {"id": "kn-IN-GaganNeural", "name": "Gagan (Male)"}
         ],
         "ml": [
-            {"id": "ml-IN-MidhunNeural", "name": "Midhun (Male)"},
-            {"id": "ml-IN-SobhanaNeural", "name": "Sobhana (Female)"}
-        ],
-        "gu": [
-            {"id": "gu-IN-NiranjanNeural", "name": "Niranjan (Male)"},
-            {"id": "gu-IN-DhwaniNeural", "name": "Dhwani (Female)"}
+            {"id": "ml-IN-MidhunNeural", "name": "Midhun (Male)"}
         ],
         "ta": [
-            {"id": "ta-IN-ValluvarNeural", "name": "Valluvar (Male)"},
-            {"id": "ta-IN-PallaviNeural", "name": "Pallavi (Female)"}
+            {"id": "ta-IN-ValluvarNeural", "name": "Valluvar (Male)"}
         ],
         "es": [
-            {"id": "es-ES-AlvaroNeural", "name": "Alvaro (Spain - Male)"},
-            {"id": "es-MX-DaliaNeural", "name": "Dalia (Mexico - Female)"}
+            {"id": "es-ES-AlvaroNeural", "name": "Alvaro (Male - Spain)"},
+            {"id": "es-MX-JorgeNeural", "name": "Jorge (Male - Mexico)"}
         ],
         "fr": [
-            {"id": "fr-FR-HenriNeural", "name": "Henri (France - Male)"},
-            {"id": "fr-FR-DeniseNeural", "name": "Denise (France - Female)"}
+            {"id": "fr-FR-HenriNeural", "name": "Henri (Male - France)"},
+            {"id": "fr-CA-AntoineNeural", "name": "Antoine (Male - Canada)"}
         ],
         "de": [
-            {"id": "de-DE-ConradNeural", "name": "Conrad (Germany - Male)"},
-            {"id": "de-DE-KatjaNeural", "name": "Katja (Germany - Female)"}
+            {"id": "de-DE-KillianNeural", "name": "Killian (Male)"}
         ],
         "zh": [
-            {"id": "zh-CN-YunxiNeural", "name": "Yunxi (Mandarin - Male)"},
-            {"id": "zh-CN-XiaoxiaoNeural", "name": "Xiaoxiao (Mandarin - Female)"}
+            {"id": "zh-CN-YunxiNeural", "name": "Yunxi (Male)"}
         ],
         "ja": [
-            {"id": "ja-JP-KeitaNeural", "name": "Keita (Japan - Male)"},
-            {"id": "ja-JP-NanamiNeural", "name": "Nanami (Japan - Female)"}
+            {"id": "ja-JP-KeitaNeural", "name": "Keita (Male)"}
+        ],
+        "ru": [
+            {"id": "ru-RU-DmitryNeural", "name": "Dmitry (Male)"}
         ]
-    }
-
-# --- WebSocket (Legacy/Streaming Support) ---
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    print("🔌 WebSocket connected")
-    
-    audio_buffer = bytearray()
-    session_id = "default" # Default session ID
-    
-    try:
-        while True:
-            message = await websocket.receive()
-            
-            if "bytes" in message:
-                # Receive raw PCM audio (Float32 or Int16)
-                audio_buffer.extend(message["bytes"])
-                
-            elif "text" in message:
-                data = json.loads(message["text"])
-                
-                if data.get("action") == "config":
-                    session_id = data.get("session_id", "default")
-                    print(f"ℹ️ WebSocket Session ID set to: {session_id}")
-
-                if data.get("action") == "process":
-                    if len(audio_buffer) == 0:
-                        continue
-                        
-                    await websocket.send_text(json.dumps({"type": "status", "message": "🎤 Transcribing..."}))
-                    
-                    # Convert buffer to numpy array for Whisper
-                    # Assuming input is 16kHz Mono Float32 (from AudioWorklet)
-                    audio_np = np.frombuffer(audio_buffer, dtype=np.float32)
-                    
-                    # 0. Extract Acoustic Features (Fast)
-                    acoustic_features = extract_acoustic_features(audio_np)
-
-                    # 1. Transcribe
-                    loop = asyncio.get_running_loop()
-                    segments, info = await loop.run_in_executor(None, lambda: whisper_model.transcribe(audio_np, beam_size=1))
-                    transcribed_text = "".join([s.text for s in segments]).strip()
-                    
-                    if not transcribed_text:
-                        await websocket.send_text(json.dumps({"type": "error", "message": "No speech detected."}))
-                        audio_buffer = bytearray()
-                        continue
-                        
-                    await websocket.send_text(json.dumps({"type": "transcription", "text": transcribed_text}))
-                    
-                    # 2. Stream Agent Thoughts
-                    await websocket.send_text(json.dumps({"type": "status", "message": "🧠 Thinking..."}))
-                    
-                    full_response = ""
-                    async for chunk in stream_knowledge_agent(transcribed_text, language=info.language, session_id=session_id, acoustic_features=acoustic_features):
-                        full_response += chunk["content"]
-                        # Send raw chunk to frontend to parse <thought> tags in real-time
-                        await websocket.send_text(json.dumps({"type": "thought_stream", "chunk": chunk["content"]}))
-                    
-                    # 3. Parse Final JSON
-                    try:
-                        ai_data = extract_json_from_text(full_response, transcribed_text)
-                        
-                        # Update Agent Memory (Learning Loop)
-                        if session_id in agent_memory_store:
-                            agent_memory_store[session_id].update_model(transcribed_text, ai_data)
-
-                        # Send structured analysis
-                        await websocket.send_text(json.dumps({"type": "analysis", "data": ai_data}))
-                        
-                        # 4. TTS
-                        await websocket.send_text(json.dumps({"type": "status", "message": "🔊 Generating Voice..."}))
-                        audio_url = await tts_router(ai_data["text"], info.language)
-                        
-                        if audio_url:
-                            await websocket.send_text(json.dumps({"type": "audio_url", "url": audio_url}))
-                            
-                    except Exception as e:
-                        print(f"JSON Parse Error: {e}")
-                        await websocket.send_text(json.dumps({"type": "error", "message": "Failed to parse agent response."}))
-                    
-                    # Clear buffer for next turn
-                    audio_buffer = bytearray()
-                    
-                elif data.get("action") == "clear":
-                    audio_buffer = bytearray()
-
-    except Exception as e:
-        print(f"WebSocket disconnected: {e}")
+    }, headers=headers)
 
 def main():
     app_port = int(os.getenv("PORT", 8000))
@@ -1634,8 +1512,8 @@ def main():
     print(f"ℹ️  Voice Profile: {VOICE_PROFILE}, Speed: {SPEED}x")
     print(f"👉 Open your browser at http://localhost:{app_port}")
     print(f"   (Set the 'PORT' environment variable to use a different port if {app_port} is busy)")
-    webbrowser.open(f"http://localhost:{app_port}")
-    uvicorn.run(app, host="127.0.0.1", port=app_port)
+    # webbrowser.open(f"http://localhost:{app_port}") # Disable auto-open for Docker/Server envs
+    uvicorn.run(app, host="0.0.0.0", port=app_port)
 
 if __name__ == "__main__":
     main()

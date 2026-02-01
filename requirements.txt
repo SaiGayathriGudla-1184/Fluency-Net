@@ -13,7 +13,7 @@ langdetect
 soundfile
 requests
 openai
-sounddevice
-RealtimeSTT
 faster-whisper>=1.0.0
-kokoro-onnx==0.4.7
+kokoro-onnx
+colorlog
+ollama
