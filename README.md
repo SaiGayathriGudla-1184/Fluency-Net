@@ -121,12 +121,83 @@ You can configure the application using environment variables or a `.env` file:
 4. Push to the branch.
 5. Open a Pull Request.
 
-## 📄 License
+Here is a comprehensive breakdown of the features, techniques, functions, modules, libraries, methods, and algorithms used in the Fluency-Net (Stutter2Fluent) application code provided.
 
-MIT License
+1. Core Features
+Real-Time Speech-to-Speech Pipeline: Converts input audio to text, processes it via AI, and synthesizes fluent speech output.
+Multilingual Support: Explicit support for 13 languages (English, Hindi, Telugu, Bengali, Kannada, Tamil, Malayalam, Spanish, French, German, Chinese, Japanese, Russian) with specific handling for Indian languages.
+Clinical Stuttering Analysis: Detects specific dysfluencies (Repetitions, Blocks, Prolongations, Interjections) and generates professional SOAP Notes (Subjective, Objective, Assessment, Plan).
+Adaptive AI Agent:
+Model-Based Reflex Agent: Maintains an internal state of the user (history, emotional state, dysfluency profile).
+Goal-Based Strategy: Dynamically switches therapy goals (e.g., "Anxiety Reduction" vs. "Fluency Shaping") based on user performance.
+Acoustic Analysis: Extracts real-time audio features like Pitch, Loudness (RMS), and Noisiness (ZCR) to aid clinical diagnosis.
+Hybrid TTS System:
+Kokoro (ONNX): High-quality local TTS for English.
+Edge-TTS: Cloud-based TTS for multilingual support.
+Session Persistence: Saves user progress and agent state to a local SQLite database.
+Robust Error Handling: Includes fallbacks for audio decoding (FFmpeg), JSON parsing, and TTS generation.
+2. Libraries & Modules
+Standard Library:
 
-```
+os, sys, shutil: File system and environment management.
+asyncio: Asynchronous programming for non-blocking I/O.
+json, ast: Data parsing (JSON and Python literals).
+sqlite3: Lightweight database for session storage.
+logging: System-wide logging.
+subprocess: Running external commands (FFmpeg, Ollama).
+re: Regular expressions for text cleaning and parsing.
+hashlib, uuid: Generating unique IDs and cache keys.
+io, base64: Binary data handling.
+Third-Party Libraries:
 
-<!--
-[PROMPT_SUGGESTION]How can I create a Dockerfile to containerize this application for easier deployment?[/PROMPT_SUGGESTION]
-[PROMPT_SUGGESTION]Explain how to set up a GitHub Action to automatically lint the Python code on push.[/PROMPT_SUGGESTION]
+Web Framework:
+fastapi: High-performance API framework.
+uvicorn: ASGI server implementation.
+jinja2: HTML templating engine.
+AI & Speech:
+faster_whisper: Optimized implementation of OpenAI's Whisper model for STT.
+kokoro_onnx: ONNX runtime for the Kokoro TTS model.
+edge_tts: Python wrapper for Microsoft Edge's online TTS service.
+agno (formerly Phidata): Framework for building AI agents.
+ollama: Client for interacting with local LLMs (Llama 3.1).
+langdetect: Heuristic-based language detection.
+jiwer: Library for calculating Word Error Rate (WER).
+Data Science & Audio:
+numpy: Numerical computing for audio signal processing.
+scipy: WAV file reading/writing.
+pydantic: Data validation and settings management.
+requests: HTTP library for downloading models/files.
+3. Algorithms & Techniques
+Speech Processing:
+
+Beam Search Decoding: Used in Whisper (beam_size=5) to explore multiple transcription paths, crucial for accuracy in agglutinative languages like Telugu.
+Voice Activity Detection (VAD): Filters out silence using energy thresholds (min_silence_duration_ms=2000) to focus processing on active speech.
+Autocorrelation: Used in extract_acoustic_features to estimate the Fundamental Frequency (Pitch/F0) of the voice.
+Zero Crossing Rate (ZCR): Algorithm to calculate the noisiness of the signal, helping detect fricative sounds (s, sh, f).
+Root Mean Square (RMS): Calculates the average power (loudness) of the audio signal.
+AI & LLM Techniques:
+
+Chain-of-Thought (CoT) Prompting: The system prompt instructs the LLM to output <thought> tags before the JSON, forcing it to reason step-by-step before generating the final analysis.
+Few-Shot Learning: The prompt includes specific examples (Input -> Output pairs) for multiple languages to "teach" the model the expected behavior.
+Heuristic Language Detection: A custom algorithm that combines Whisper's detection, langdetect library, and script analysis (Latin vs. Non-Latin ratio) to accurately identify the language.
+Software Engineering:
+
+Dependency Injection: Used via FastAPI's Depends (implicit in route handlers).
+Caching Strategy: TTS audio is cached using an MD5 hash of text + voice + speed to prevent redundant processing.
+Retry Logic: Implemented in knowledge_agent_client to handle transient LLM failures.
+4. Key Functions & Methods
+process_audio_pipeline: The central orchestrator that manages the flow from Audio Upload -> Transcription -> AI Analysis -> TTS -> Response.
+knowledge_agent_client: Manages the interaction with the LLM, including prompt construction and JSON extraction.
+extract_json_from_text: A robust parser that cleans raw LLM output (removing markdown, fixing trailing commas) to extract valid JSON.
+determine_agent_goal: Implements the logic for the Goal-Based Agent, deciding whether to focus on "Anxiety Reduction" or "Fluency Shaping".
+tts_router: Intelligently routes TTS requests to either Kokoro (for high-quality English) or Edge-TTS (for other languages), handling voice selection and fallbacks.
+extract_acoustic_features: Computes RMS, ZCR, Variance, and Pitch from raw numpy audio arrays.
+decode_audio_fallback: Uses system FFmpeg via subprocess to decode audio if the primary library fails.
+check_and_download_models: Ensures required model files (ONNX) are present on startup.
+5. Specifications
+Audio Sample Rate: 16,000 Hz (Standard for speech recognition models).
+Whisper Model: Configurable tiers (base, small, large-v3).
+LLM Model: Llama 3.1 8B (via Ollama).
+Database: SQLite (sessions.db) storing JSON-serialized state.
+Containerization: Dockerfile based on python:3.11-slim with uv for fast package management.
+
