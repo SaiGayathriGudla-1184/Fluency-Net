@@ -1,3 +1,29 @@
+<<<<<<< HEAD
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install system dependencies (FFmpeg for Whisper/Deepgram, eSpeak for text-to-speech)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ffmpeg \
+    espeak-ng \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
+COPY . .
+
+# Run the FastAPI server directly on 0.0.0.0
+EXPOSE 9067
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9067"]
+=======
 # syntax=docker/dockerfile:1
 # Use Python 3.11 (Compatible with faster-whisper)
 FROM python:3.11-slim
@@ -48,3 +74,4 @@ EXPOSE 8000
 # Run the application
 # We use python main.py to trigger the startup logic (model checks)
 CMD ["python", "main.py"]
+>>>>>>> 4a061bd5aa45e150fe8069b75d008d668a073d2e

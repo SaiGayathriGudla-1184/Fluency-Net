@@ -4,11 +4,10 @@ import sys
 import urllib.request
 import shutil
 import platform
-
 def install_python_dependencies():
     print("📦 Installing Python dependencies...")
     try:
-        # Explicitly install numpy and sounddevice first to ensure they are available
+        # Explicitly install numpy first to ensure it is available
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
         
         # Install all dependencies from requirements.txt
@@ -92,12 +91,42 @@ def check_system_requirements():
         else:
             print("✅ FFmpeg is installed.")
 
-def pull_ollama_model(model_name="llama3.1:8b"):
+    elif system == "Darwin":  # macOS
+        print("   [System] Checking Ollama...")
+        if shutil.which("ollama") is None:
+            print("⚠️ Ollama not found. Please download and install from https://ollama.com/")
+        else:
+            print("✅ Ollama is installed.")
+
+        print("   [System] Checking eSpeak NG...")
+        if shutil.which("espeak-ng") is None:
+            print("⚠️ eSpeak NG not found. 👉 Install via Homebrew: brew install espeak-ng")
+        else:
+            print("✅ eSpeak NG is installed.")
+
+        print("   [System] Checking FFmpeg...")
+        if shutil.which("ffmpeg") is None:
+            print("⚠️ FFmpeg not found. 👉 Install via Homebrew: brew install ffmpeg")
+        else:
+            print("✅ FFmpeg is installed.")
+
+    elif system == "Linux":
+        # Generic checks for Linux, assuming apt package manager for suggestions
+        for pkg, install_cmd in [("ollama", "See installation instructions at https://ollama.com/"), ("espeak-ng", "sudo apt-get install espeak-ng"), ("ffmpeg", "sudo apt-get install ffmpeg")]:
+            print(f"   [System] Checking {pkg}...")
+            if shutil.which(pkg) is None:
+                print(f"⚠️ {pkg} not found. 👉 {install_cmd}")
+            else:
+                print(f"✅ {pkg} is installed.")
+
+def pull_ollama_model(model_name="llama3.2:3b"):
     print(f"🦙 Pulling Ollama model ({model_name})...")
     try:
         # Check if ollama is installed
         subprocess.check_call(["ollama", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.check_call(["ollama", "pull", model_name])
+        subprocess.check_call(["ollama", "pull", "llama3.2:1b"])
+        subprocess.check_call(["ollama", "pull", "llama3.1:8b"])
         print("✅ Ollama model pulled.")
     except FileNotFoundError:
         print("❌ Ollama is not installed or not in PATH. Please install Ollama from https://ollama.com/")
@@ -120,11 +149,16 @@ def main():
         ("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", "voices-v1.0.bin")
     ]
     
+    # Ensure models directory exists
+    if not os.path.exists("models"):
+        os.makedirs("models")
+
     for url, filename in models:
-        download_file(url, filename)
+        target_path = os.path.join("models", filename)
+        download_file(url, target_path)
 
     # 4. Pull Ollama Model
-    pull_ollama_model()
+    pull_ollama_model("llama3.2:3b")
 
     print("\n🎉 Setup actions completed.")
     print("ℹ️  If installers were downloaded (OllamaSetup.exe, espeak-ng-X64.msi), please run them manually.")

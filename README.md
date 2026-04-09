@@ -1,12 +1,15 @@
-
 # Fluency-Net
 
 A real-time, AI-powered speech therapy assistant designed to help users improve fluency. This application uses advanced speech-to-speech technology to analyze stuttering patterns, provide therapeutic feedback, and generate fluent audio/video output.
 
+Speech-language disorders, particularly stuttering, affect millions of individuals globally, often leading to communication anxiety and limited access to consistent professional therapy. While modern speech technologies have advanced significantly, most Automatic Speech Recognition (ASR) systems are designed to "clean" or "normalize" speech, effectively removing the very dysfluencies (blocks, prolongations, and repetitions) necessary for therapeutic analysis. This project introduces Stutter2Fluent, an autonomous, real-time AI Vocal Agent designed to bridge the gap between clinical speech-language pathology and accessible technology.
+
+**Keywords:** Generative AI, Speech-Language Pathology, Large Language Models (LLMs), Multilingual ASR, Speech Synthesis, SOAP Notes, Stuttering Detection
+
 ## 🌟 Features
 
 - **Real-Time Streaming**: Low-latency speech analysis using WebSockets and AudioWorklet.
-- **Multilingual Support**: Supports English, Hindi, Telugu, Spanish, French, and many more.
+- **Multilingual Support**: Provides focused support for English, Hindi, and major South Indian languages (Telugu, Tamil, Kannada, Malayalam).
 - **AI Analysis**: Uses **Ollama (Llama 3.1)** and **Agno** to detect stuttering types (Repetitions, Blocks, Prolongations) and provide clinical SOAP notes.
 - **Adaptive Agentic Workflow**: Implements a stateful reflex agent that dynamically adjusts therapy goals (e.g., switching from "Fluency Shaping" to "Anxiety Reduction") based on real-time user performance metrics.
 - **Fluent Regeneration**: Reconstructs fragmented speech into fluent text and audio using **Kokoro TTS** (High Quality) or **Edge TTS**.
@@ -24,6 +27,11 @@ Before running the application, ensure you have the following installed:
 3. **Ollama**: Required for the AI Agent logic.
     - Download from ollama.com.
     - Pull the model: `ollama pull llama3.1:8b`
+
+4. **eSpeak NG**: Required for phonemization by the local English TTS (Kokoro).
+    - Windows: Download and run the `.msi` installer from the eSpeak NG GitHub releases.
+    - Mac: `brew install espeak-ng`
+    - Linux: `sudo apt install espeak-ng`
 
 ## 🚀 Installation & Setup
 
@@ -136,7 +144,7 @@ Kokoro (ONNX): High-quality local TTS for English.
 Edge-TTS: Cloud-based TTS for multilingual support.
 Session Persistence: Saves user progress and agent state to a local SQLite database.
 Robust Error Handling: Includes fallbacks for audio decoding (FFmpeg), JSON parsing, and TTS generation.
-2. Libraries & Modules
+1. Libraries & Modules
 Standard Library:
 
 os, sys, shutil: File system and environment management.
@@ -200,4 +208,3 @@ Whisper Model: Configurable tiers (base, small, large-v3).
 LLM Model: Llama 3.1 8B (via Ollama).
 Database: SQLite (sessions.db) storing JSON-serialized state.
 Containerization: Dockerfile based on python:3.11-slim with uv for fast package management.
-

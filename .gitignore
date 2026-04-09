@@ -1,17 +1,10 @@
-# Python
-__pycache__/
-*.pyc
+# Environments
 venv/
-
-# Environment Variables
+__pycache__/
 .env
 
-# Application Data
-temp/
-*.onnx
-*.bin
-
-# Project Artifacts
+# Data, Models, and Temporary Files
 models/
+temp/
 data/
 *.db
