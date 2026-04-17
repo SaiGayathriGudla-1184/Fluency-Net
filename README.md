@@ -131,7 +131,7 @@ You can configure the application using environment variables or a `.env` file:
 
 Here is a comprehensive breakdown of the features, techniques, functions, modules, libraries, methods, and algorithms used in the Fluency-Net (Stutter2Fluent) application code provided.
 
-1. Core Features
+**1. Core Features**
 Real-Time Speech-to-Speech Pipeline: Converts input audio to text, processes it via AI, and synthesizes fluent speech output.
 Multilingual Support: Explicit support for 13 languages (English, Hindi, Telugu, Bengali, Kannada, Tamil, Malayalam, Spanish, French, German, Chinese, Japanese, Russian) with specific handling for Indian languages.
 Clinical Stuttering Analysis: Detects specific dysfluencies (Repetitions, Blocks, Prolongations, Interjections) and generates professional SOAP Notes (Subjective, Objective, Assessment, Plan).
@@ -144,8 +144,9 @@ Kokoro (ONNX): High-quality local TTS for English.
 Edge-TTS: Cloud-based TTS for multilingual support.
 Session Persistence: Saves user progress and agent state to a local SQLite database.
 Robust Error Handling: Includes fallbacks for audio decoding (FFmpeg), JSON parsing, and TTS generation.
-1. Libraries & Modules
-Standard Library:
+
+**1. Libraries & Modules
+Standard Library:**
 
 os, sys, shutil: File system and environment management.
 asyncio: Asynchronous programming for non-blocking I/O.
@@ -158,7 +159,7 @@ hashlib, uuid: Generating unique IDs and cache keys.
 io, base64: Binary data handling.
 Third-Party Libraries:
 
-Web Framework:
+**Web Framework:**
 fastapi: High-performance API framework.
 uvicorn: ASGI server implementation.
 jinja2: HTML templating engine.
@@ -175,8 +176,8 @@ numpy: Numerical computing for audio signal processing.
 scipy: WAV file reading/writing.
 pydantic: Data validation and settings management.
 requests: HTTP library for downloading models/files.
-3. Algorithms & Techniques
-Speech Processing:
+**3. Algorithms & Techniques
+Speech Processing:**
 
 Beam Search Decoding: Used in Whisper (beam_size=5) to explore multiple transcription paths, crucial for accuracy in agglutinative languages like Telugu.
 Voice Activity Detection (VAD): Filters out silence using energy thresholds (min_silence_duration_ms=2000) to focus processing on active speech.
