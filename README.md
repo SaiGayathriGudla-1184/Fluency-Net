@@ -175,10 +175,10 @@ Data Science & Audio:
 numpy: Numerical computing for audio signal processing.
 scipy: WAV file reading/writing.
 pydantic: Data validation and settings management.
-requests: HTTP library for downloading models/files.
+requests: HTTP library for downloading models/files
+
 **3. Algorithms & Techniques
 Speech Processing:**
-
 Beam Search Decoding: Used in Whisper (beam_size=5) to explore multiple transcription paths, crucial for accuracy in agglutinative languages like Telugu.
 Voice Activity Detection (VAD): Filters out silence using energy thresholds (min_silence_duration_ms=2000) to focus processing on active speech.
 Autocorrelation: Used in extract_acoustic_features to estimate the Fundamental Frequency (Pitch/F0) of the voice.
